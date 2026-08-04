@@ -1,0 +1,25 @@
+name: shellcheck
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Syntax check
+        run: bash -n claude-desktop-userland.sh
+
+      - name: Lint
+        run: shellcheck -S warning -s bash claude-desktop-userland.sh
+
+      - name: Help output must work
+        run: ./claude-desktop-userland.sh --help

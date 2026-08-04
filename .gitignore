@@ -1,0 +1,24 @@
+# local scratch
+*.deb
+*.tar.*
+*.asc
+Packages
+InRelease
+Release
+Release.gpg
+Release.verified
+/tmp/
+/root/
+/build/
+
+# editor / OS noise
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+
+# never commit local agent or assistant config
+CLAUDE.md
+.claude/
+.env
