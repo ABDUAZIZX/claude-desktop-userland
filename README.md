@@ -9,7 +9,7 @@ Tested on Bluefin GDX. The approach applies to any immutable Fedora variant
 well on a mutable distro where you simply do not want vendor packages in `/usr`.
 
 ```
-curl -fsSLO https://raw.githubusercontent.com/azoz8/claude-desktop-userland/main/claude-desktop-userland.sh
+curl -fsSLO https://raw.githubusercontent.com/ABDUAZIZX/claude-desktop-userland/main/claude-desktop-userland.sh
 chmod +x claude-desktop-userland.sh
 ./claude-desktop-userland.sh
 ```
