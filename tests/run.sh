@@ -459,10 +459,20 @@ t_readme() {
   if [ "$block" = "$want" ]; then ok "README Usage block matches --help verbatim"
   else nok "README Usage block matches --help verbatim" "$(diff <(printf '%s\n' "$want") <(printf '%s\n' "$block") | head -n 20)"; fi
 
-  want="$(sha256sum "$SCRIPT" | cut -d' ' -f1)"
+  # The snippet downloads the script from tag v$SELF_VERSION, so its hash must
+  # match the script as released at that tag, not the working copy (which
+  # changes between releases). Before the tag exists (release step 1-4) the
+  # working copy is the release candidate and is compared instead.
+  local ref="working copy"
+  if git -C "$HERE/.." rev-parse -q --verify "refs/tags/v$SELF_VERSION" >/dev/null 2>&1; then
+    want="$(git -C "$HERE/.." show "v$SELF_VERSION:claude-desktop-userland.sh" | sha256sum | cut -d' ' -f1)"
+    ref="tag v$SELF_VERSION"
+  else
+    want="$(sha256sum "$SCRIPT" | cut -d' ' -f1)"
+  fi
   got="$(sed -n 's/^echo "\([0-9a-f]\{64\}\)  claude-desktop-userland.sh" | sha256sum -c -$/\1/p' "$readme")"
-  if [ "$got" = "$want" ]; then ok "README install hash matches the script"
-  else nok "README install hash matches the script" "README=$got script=$want (update the install snippet)"; fi
+  if [ "$got" = "$want" ]; then ok "README install hash matches the script ($ref)"
+  else nok "README install hash matches the script ($ref)" "README=$got $ref=$want (update the install snippet)"; fi
 
   if grep -q "raw.githubusercontent.com/ABDUAZIZX/claude-desktop-userland/v$SELF_VERSION/claude-desktop-userland.sh" "$readme"; then
     ok "README install URL points at tag v$SELF_VERSION"

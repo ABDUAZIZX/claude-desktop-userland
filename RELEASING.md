@@ -49,7 +49,8 @@ bash tests/run.sh
 ```
 
 All must pass. `tests/run.sh` fails if the README usage block differs from
-`--help`, if the README hash differs from the script, if the README URL does
+`--help`, if the README hash differs from the script (the working copy while
+tag `v$SELF_VERSION` does not exist yet, the tagged file afterwards), if the README URL does
 not point at `v$SELF_VERSION`, or if `CHANGELOG.md` has no
 `## $SELF_VERSION (YYYY-MM-DD)` heading with a real date, so steps 1 to 3 are
 checked here.
