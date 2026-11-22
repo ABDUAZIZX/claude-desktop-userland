@@ -31,6 +31,24 @@ Two kinds of job, because a container cannot test what matters most.
   userns restriction and the profile from `--print-apparmor-profile`
   (load, launch headless, confirm the renderer sandbox started, unload).
 
+## Signed release artifacts
+
+Every release carries a signature that does not come from the same place as
+the file it covers:
+
+- **Signed tag** for every version (`git tag -s`), verifiable with
+  `git tag -v` against a published signing key. Unsigned tags are never
+  pushed.
+- **Signed `SHA256SUMS`** attached to every GitHub Release: the checksum of
+  `claude-desktop-userland.sh` (and of any future asset) plus a detached
+  signature over that file, with a documented verification command
+  (`ssh-keygen -Y verify` against an `allowed_signers` file, or `gpg --verify`,
+  depending on the key type chosen).
+- The README install snippet then gains a step that verifies `SHA256SUMS`
+  before `sha256sum -c`. Today the README hash and the script come from the
+  same repository, which protects against a corrupted download but is not an
+  independent signature.
+
 ## README compatibility table
 
 Generated from the CI results, with wording that matches what was actually
