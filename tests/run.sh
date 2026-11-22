@@ -471,8 +471,30 @@ t_readme() {
   fi
 }
 
+# --- repository version format -------------------------------------------------
+t_version_format() {
+  local v
+  for v in 6.28899.6 1 10.0.0 0.1; do
+    expect_rc 0 "version accepted: $v" valid_version "$v"
+  done
+  for v in "../x" "1.0~rc1" "1:2.0" "" "1..2" "1." ".1" "1.0 " "-1" "1.0/.." $'1.0\n2' "v1.0" "1.0-1"; do
+    expect_rc 1 "version refused: $(printf '%q' "$v")" valid_version "$v"
+  done
+  # the check sits right after step_select_package, before VER is used anywhere
+  local body sel chk first_use
+  body="$(declare -f main)"
+  sel="$(grep -n 'step_select_package' <<<"$body" | head -n1 | cut -d: -f1)"
+  chk="$(grep -n 'valid_version "\$VER"' <<<"$body" | head -n1 | cut -d: -f1)"
+  first_use="$(grep -n '\$VER' <<<"$body" | grep -v 'valid_version\|printf' | head -n1 | cut -d: -f1)"
+  if [ -n "$sel" ] && [ -n "$chk" ] && [ "$chk" -eq $((sel + 1)) ] && [ "$chk" -lt "$first_use" ]; then
+    ok "VER validated immediately after step_select_package"
+  else
+    nok "VER validated immediately after step_select_package" "select=$sel check=$chk first_use=$first_use"
+  fi
+}
+
 # Test groups register themselves here.
-TESTS=(t_sourcing t_apparmor t_libs t_extract t_release_dates t_downgrade t_date_floor t_skip_record t_readme)
+TESTS=(t_sourcing t_apparmor t_libs t_extract t_release_dates t_downgrade t_date_floor t_skip_record t_readme t_version_format)
 
 for t in "${TESTS[@]}"; do "$t"; done
 

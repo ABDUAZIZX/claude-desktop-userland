@@ -26,6 +26,8 @@
   `CLAUDE_PASSWORD_STORE`
 - Cowork report no longer claims `/dev/kvm` is sufficient
 - `--uninstall` points at the AppArmor profile when one is installed
+- The repository version must match `^[0-9]+(\.[0-9]+)*$` before it is used
+  in any path or comparison; anything else stops the install
 - AppArmor: the restriction sysctl is optional (absent = unrestricted), the
   profile output carries an explicit writable-path warning, and every message
   lists the profile first and `CLAUDE_NO_SANDBOX=1` as the last resort

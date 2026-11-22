@@ -621,6 +621,14 @@ verify_release_freshness() {
   c_ok "index fresh: Date $d, valid until $v"
 }
 
+# valid_version STRING -- digits separated by single dots, nothing else.
+# The repository version becomes a path component (versions/<ver>, removed
+# with rm -rf; package-meta/<ver>) and is ordered with sort -V, so anything
+# else ("../x", "1.0~rc1", "1:2.0", empty) is refused rather than sanitised.
+valid_version() {
+  [[ "$1" =~ ^[0-9]+(\.[0-9]+)*$ ]]
+}
+
 # version_lt A B -- true when A sorts strictly before B (sort -V)
 version_lt() {
   [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n1)" = "$1" ]
@@ -1302,6 +1310,8 @@ main() {
 
   step_fetch_verified_index
   step_select_package
+  valid_version "$VER" \
+    || die "repository version $(printf '%q' "$VER") is not of the form N(.N)*; refusing (it is used in install paths and for version ordering)"
   if [ "$MODE" = "check" ]; then
     if [ "$INSTALLED_VER" = "$VER" ]; then
       c_ok "up to date"

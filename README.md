@@ -17,7 +17,7 @@ before running it:
 
 ```
 curl -fsSLO https://raw.githubusercontent.com/ABDUAZIZX/claude-desktop-userland/v1.1.0/claude-desktop-userland.sh
-echo "449328f50ea9f0f41c6d725c34b259f4b6e866c5c8d3f3822250ad1edc52607c  claude-desktop-userland.sh" | sha256sum -c -
+echo "162d1f16fe51ca844aa2e444236e200d08bbd8ebad282deec1c4b4ef597796e9  claude-desktop-userland.sh" | sha256sum -c -
 chmod +x claude-desktop-userland.sh
 ./claude-desktop-userland.sh --doctor   # optional: host check, offline
 ./claude-desktop-userland.sh
