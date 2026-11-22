@@ -23,6 +23,9 @@
 # Usage:
 #   ./claude-desktop-userland.sh              install or upgrade to latest
 #   ./claude-desktop-userland.sh --check      report installed vs. available
+#   ./claude-desktop-userland.sh --inspect    download latest, show package
+#                                             relations and maintainer scripts,
+#                                             diff against last seen; no install
 #   ./claude-desktop-userland.sh --force      reinstall even if up to date
 #   ./claude-desktop-userland.sh --uninstall  remove app (keeps ~/.config/Claude)
 #   ./claude-desktop-userland.sh --purge      remove app AND config/data
@@ -36,10 +39,11 @@ KEY_URL="https://downloads.claude.ai/claude-desktop/key.asc"
 REPO_BASE="https://downloads.claude.ai/claude-desktop/apt/stable"
 KEY_FPR="31DDDE24DDFAB679F42D7BD2BAA929FF1A7ECACE"
 PKG_NAME="claude-desktop"
-SELF_VERSION="1.0.0"
+SELF_VERSION="1.1.0"
 
 BASE="${XDG_DATA_HOME:-$HOME/.local/share}/claude-desktop"
 VERSIONS="$BASE/versions"
+META_DIR="$BASE/package-meta"
 CURRENT="$BASE/current"
 BIN="$HOME/.local/bin/claude-desktop"
 DESKTOP_FILE="${XDG_DATA_HOME:-$HOME/.local/share}/applications/claude-desktop.desktop"
@@ -81,6 +85,8 @@ bootc system, without dpkg, without layering, without root.
 
   (no option)   install, or upgrade to the latest published version
   --check       report installed vs. available version, change nothing
+  --inspect     download latest, show package relations and maintainer
+                scripts, diff against the last seen version; no install
   --force       reinstall even if already up to date
   --uninstall   remove the application, keep ~/.config/Claude
   --purge       remove the application and its configuration/data
@@ -94,6 +100,7 @@ case "${1:-}" in
   --uninstall)     do_uninstall no ;;
   --purge)         do_uninstall purge ;;
   --check)         MODE="check" ;;
+  --inspect)       MODE="inspect" ;;
   --force)         MODE="force" ;;
   -h|--help)       usage; exit 0 ;;
   -V|--version)    printf '%s\n' "$SELF_VERSION"; exit 0 ;;
@@ -102,7 +109,7 @@ case "${1:-}" in
 esac
 
 # --- preflight -------------------------------------------------------------
-for t in curl gpg sha256sum awk tar python3 find sed; do need "$t"; done
+for t in curl gpg sha256sum awk tar python3 find sed diff; do need "$t"; done
 
 ARCH="$(uname -m)"
 case "$ARCH" in
@@ -182,7 +189,7 @@ if [ "$MODE" = "check" ]; then
   [ "$INSTALLED_VER" = "$VER" ] && c_ok "up to date" || c_warn "update available"
   exit 0
 fi
-if [ "$INSTALLED_VER" = "$VER" ] && [ "$MODE" != "force" ]; then
+if [ "$INSTALLED_VER" = "$VER" ] && [ "$MODE" = "install" ]; then
   c_ok "already up to date, nothing to do (use --force to reinstall)"
   exit 0
 fi
@@ -195,9 +202,10 @@ c_ok "package checksum verified"
 
 # --- 6. extract .deb without dpkg ------------------------------------------
 c_info "extracting"
-DATA_TAR="$(python3 - "$TMP/pkg.deb" "$TMP" <<'PY'
-import sys, os
+TARS="$(python3 - "$TMP/pkg.deb" "$TMP" <<'PY'
+import sys, os, re
 deb, outdir = sys.argv[1], sys.argv[2]
+data_path = control_path = None
 with open(deb, 'rb') as f:
     if f.read(8) != b'!<arch>\n':
         sys.exit("not a valid .deb (ar) archive")
@@ -208,7 +216,7 @@ with open(deb, 'rb') as f:
         name = hdr[0:16].decode('ascii', 'replace').strip().rstrip('/')
         size = int(hdr[48:58].decode('ascii').strip())
         start = f.tell()
-        if name.startswith('data.tar'):
+        if re.fullmatch(r'(data|control)\.tar(\.[a-z0-9]+)?', name):
             out = os.path.join(outdir, name)
             with open(out, 'wb') as o:
                 left = size
@@ -217,20 +225,79 @@ with open(deb, 'rb') as f:
                     if not chunk:
                         sys.exit("truncated archive")
                     o.write(chunk); left -= len(chunk)
-            print(out); sys.exit(0)
+            if name.startswith('data'):
+                data_path = out
+            else:
+                control_path = out
         f.seek(start + size + (size % 2))
-sys.exit("data.tar member not found in .deb")
+if not data_path or not control_path:
+    sys.exit("data.tar or control.tar member not found in .deb")
+print(data_path)
+print(control_path)
 PY
 )" || die "could not unpack the .deb container"
 
+DATA_TAR="${TARS%%$'\n'*}"
+CONTROL_TAR="${TARS##*$'\n'}"
+
+untar() {
+  case "$1" in
+    *.xz)  tar -xJf "$1" -C "$2" ;;
+    *.gz)  tar -xzf "$1" -C "$2" ;;
+    *.zst) need zstd; zstd -dc "$1" | tar -xf - -C "$2" ;;
+    *.tar) tar -xf  "$1" -C "$2" ;;
+    *) die "unknown compression: $1" ;;
+  esac
+}
+
+# --- 6b. surface what dpkg would have done ---------------------------------
+# Nothing here is ever executed. This install skips Depends resolution and the
+# maintainer scripts, so changes to either need a human look at upgrade time.
+report_package_meta() {
+  local src="$1" dest="$META_DIR/$VER" prev="" f
+  rm -rf "$dest"; mkdir -p "$dest"
+  for f in control preinst postinst prerm postrm triggers conffiles; do
+    if [ -f "$src/$f" ]; then
+      cp "$src/$f" "$dest/$f"
+      chmod 644 "$dest/$f"
+    fi
+  done
+  awk '/^[A-Za-z-]+:/ { p = ($1 ~ /^(Pre-Depends|Depends|Recommends|Suggests|Conflicts|Breaks|Replaces|Provides):$/) } p' \
+    "$dest/control" > "$dest/relations"
+
+  c_info "package relations for $VER (not resolved by this installer):"
+  sed 's/^/    /' "$dest/relations"
+  c_info "maintainer scripts (never executed here):"
+  for f in preinst postinst prerm postrm triggers; do
+    [ -f "$dest/$f" ] && printf '    %s (%s lines)\n' "$f" "$(wc -l < "$dest/$f")"
+  done
+  c_info "saved to $dest"
+
+  prev="$(find "$META_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' \
+          | grep -vxF "$VER" | sort -V | tail -n1 || true)"
+  if [ -z "$prev" ]; then
+    c_warn "no earlier package metadata to compare; review the scripts in full:"
+    for f in preinst postinst prerm postrm; do
+      if [ -f "$dest/$f" ]; then
+        printf -- '--- %s\n' "$f"
+        cat "$dest/$f"
+      fi
+    done
+  elif diff -ru --exclude=control "$META_DIR/$prev" "$dest"; then
+    c_ok "relations and maintainer scripts unchanged since $prev"
+  else
+    c_warn "relations or maintainer scripts changed since $prev; review the diff above"
+  fi
+}
+
+CTRL="$TMP/control"; mkdir -p "$CTRL"
+untar "$CONTROL_TAR" "$CTRL"
+[ -f "$CTRL/control" ] || die "control file missing from package"
+report_package_meta "$CTRL"
+[ "$MODE" = "inspect" ] && exit 0
+
 ROOT="$TMP/root"; mkdir -p "$ROOT"
-case "$DATA_TAR" in
-  *.xz)  tar -xJf "$DATA_TAR" -C "$ROOT" ;;
-  *.gz)  tar -xzf "$DATA_TAR" -C "$ROOT" ;;
-  *.zst) need zstd; zstd -dc "$DATA_TAR" | tar -xf - -C "$ROOT" ;;
-  *.tar) tar -xf  "$DATA_TAR" -C "$ROOT" ;;
-  *) die "unknown payload compression: $DATA_TAR" ;;
-esac
+untar "$DATA_TAR" "$ROOT"
 c_ok "payload extracted"
 
 # --- 7. locate the Electron app root ---------------------------------------
@@ -270,11 +337,17 @@ c_ok "installed to $TARGET"
 ls -1 "$VERSIONS" | sort -V | head -n -2 | while read -r old; do
   [ "$old" = "$VER" ] || rm -rf "${VERSIONS:?}/$old"
 done
+# metadata follows the same retention as the versions it describes
+for d in "$META_DIR"/*/; do
+  [ -d "$d" ] || continue
+  v="$(basename "$d")"
+  [ -d "$VERSIONS/$v" ] || rm -rf "${META_DIR:?}/$v"
+done
 
 # --- 9. launcher wrapper ---------------------------------------------------
 cat > "$BIN" <<WRAP
 #!/usr/bin/env bash
-# Created by the installer script; regenerated on every run. Do not edit.
+# Generated by claude-desktop-userland.sh -- do not edit; it is overwritten.
 set -euo pipefail
 APP="\$HOME/.local/share/claude-desktop/current/$BINNAME"
 [ -x "\$APP" ] || { echo "Claude Desktop is not installed correctly." >&2; exit 1; }

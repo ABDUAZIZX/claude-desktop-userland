@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.0 (unreleased)
+
+- `--inspect`: download and verify the latest package, print its
+  `Depends`/`Recommends` and maintainer scripts (never executed), and diff them
+  against the last version seen. A normal install/upgrade runs the same report
+  automatically and keeps it under `~/.local/share/claude-desktop/package-meta/`
+- Package metadata follows the same two-version retention as the app payload
+
 ## 1.0.0
 
 Initial public release.
