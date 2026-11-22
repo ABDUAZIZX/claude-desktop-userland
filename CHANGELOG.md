@@ -15,7 +15,7 @@
 - `--print-apparmor-profile`: userns profile for the install path, with load
   and removal instructions and the trade-off spelled out
 - glibc check before the download; `--skip-host-check` (install and
-  `--force` only) skips it
+  `--force` only) skips the version floor only, never the musl refusal
 - Launcher: warns about the AppArmor restriction, honours
   `CLAUDE_PASSWORD_STORE`
 - Cowork report no longer claims `/dev/kvm` is sufficient

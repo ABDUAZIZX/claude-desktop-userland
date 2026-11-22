@@ -96,8 +96,12 @@ installed_binname() {
   return 1
 }
 
+# check_libc [skip-floor]
+# With "skip-floor" (--skip-host-check) only the version floor becomes a
+# warning; a host without glibc (musl) is refused regardless, and the NixOS
+# warning is always shown.
 check_libc() {
-  local v
+  local skip="${1:-}" v
   if [ -e /etc/NIXOS ]; then
     c_warn "NixOS detected: the upstream binary expects an FHS layout."
     c_warn "  enable programs.nix-ld (with the libraries reported below) or run it via steam-run"
@@ -112,8 +116,13 @@ check_libc() {
   if [ "$(printf '%s\n%s\n' "$MIN_GLIBC" "$v" | sort -V | head -n1)" = "$MIN_GLIBC" ]; then
     c_ok "glibc $v (>= $MIN_GLIBC)"
   else
-    h_fail "glibc $v is older than the required $MIN_GLIBC (e.g. Debian 11, RHEL/Alma/Rocky 8)"
-    c_info "  use a newer distribution, or a distrobox/toolbox container with glibc >= $MIN_GLIBC"
+    if [ "$skip" = skip-floor ]; then
+      c_warn "glibc $v is older than the required $MIN_GLIBC; continuing because of --skip-host-check"
+      c_warn "  the app will most likely fail to start on this host"
+    else
+      h_fail "glibc $v is older than the required $MIN_GLIBC (e.g. Debian 11, RHEL/Alma/Rocky 8)"
+      c_info "  use a newer distribution, or a distrobox/toolbox container with glibc >= $MIN_GLIBC"
+    fi
   fi
 }
 
@@ -675,9 +684,12 @@ bootc system, without dpkg, without layering, without root.
                 verified (with a warning). Never bypasses the signature or
                 Valid-Until checks
   --skip-host-check
-                modifier for install and --force: skip the glibc check
-                that runs before the download. Compatibility only; no
-                signature, freshness or downgrade check is affected
+                modifier for install and --force: continue when glibc is
+                older than $MIN_GLIBC (the version floor only). It does NOT
+                cover a host without glibc (musl is still refused), does not
+                silence the NixOS warning, does not skip the post-install
+                checks, and touches no signature, freshness or downgrade
+                check
   --doctor      check this host can run the app (glibc, sandbox, shared
                 libraries, keyring, portals); offline, changes nothing
   --print-apparmor-profile
@@ -747,9 +759,14 @@ AR_TOOL="$(pick_ar_tool)" || die "need one of bsdtar (libarchive), ar (binutils)
 
 # Refuse before a 160 MB download on hosts that cannot load the binary at all.
 # The remaining checks run after installation, when there is a binary to test.
-if [ "$MODE" != "check" ] && [ "$MODE" != "inspect" ] && [ "$SKIP_HOST_CHECK" != 1 ]; then
-  check_libc
-  [ "$HOST_FAIL" = 0 ] || die "this host cannot run the upstream build (override: --skip-host-check)"
+if [ "$MODE" != "check" ] && [ "$MODE" != "inspect" ]; then
+  if [ "$SKIP_HOST_CHECK" = 1 ]; then
+    check_libc skip-floor
+    [ "$HOST_FAIL" = 0 ] || die "this host cannot run the upstream build (--skip-host-check does not cover a missing glibc)"
+  else
+    check_libc
+    [ "$HOST_FAIL" = 0 ] || die "this host cannot run the upstream build (glibc too old? see --skip-host-check)"
+  fi
 fi
 
 ARCH="$(uname -m)"

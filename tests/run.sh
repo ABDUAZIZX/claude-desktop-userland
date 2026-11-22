@@ -342,6 +342,20 @@ t_downgrade() {
   expect_rc 0 "--skip-host-check accepted with --force"   parse_args --force --skip-host-check
   expect_rc 1 "--skip-host-check rejected with --check"   parse_args --check --skip-host-check
   expect_rc 1 "--skip-host-check rejected with --doctor"  parse_args --doctor --skip-host-check
+  # scope: version floor only
+  local fk="$WORK/fakeglibc"; mkdir -p "$fk/old" "$fk/musl"
+  printf '#!/bin/sh\necho "glibc 2.31"\n' >"$fk/old/getconf"
+  printf '#!/bin/sh\nexit 1\n' >"$fk/musl/getconf"
+  chmod +x "$fk/old/getconf" "$fk/musl/getconf"
+  expect_out 'HOST_FAIL=1' "old glibc fails without --skip-host-check" \
+    env PATH="$fk/old:$PATH" bash -c '. "$1"; check_libc; echo "HOST_FAIL=$HOST_FAIL"' _ "$SCRIPT"
+  expect_out 'HOST_FAIL=0' "old glibc only warns with --skip-host-check" \
+    env PATH="$fk/old:$PATH" bash -c '. "$1"; check_libc skip-floor; echo "HOST_FAIL=$HOST_FAIL"' _ "$SCRIPT"
+  expect_out 'HOST_FAIL=1' "musl still refused with --skip-host-check" \
+    env PATH="$fk/musl:$PATH" bash -c '. "$1"; check_libc skip-floor; echo "HOST_FAIL=$HOST_FAIL"' _ "$SCRIPT"
+  expect_out 'does not cover a missing glibc' "preflight on musl with the flag dies with the scope message" \
+    env PATH="$fk/musl:$PATH" bash -c 'set -euo pipefail; . "$1"; parse_args --skip-host-check; CURRENT="$2/none"; step_preflight' _ "$SCRIPT" "$WORK"
+
   # the old environment variable must have no effect any more
   expect_out 'SKIP=0' "CLAUDE_SKIP_HOST_CHECK env var ignored" \
     env CLAUDE_SKIP_HOST_CHECK=1 bash -c '. "$1"; parse_args; echo "SKIP=$SKIP_HOST_CHECK"' _ "$SCRIPT"
