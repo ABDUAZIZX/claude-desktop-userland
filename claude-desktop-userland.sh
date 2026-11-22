@@ -1,34 +1,41 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-# claude-desktop-userland.sh
+# claude-desktop-userland.sh -- unofficial installer for the OFFICIAL package
 #
-# Installs Anthropic's OFFICIAL Claude Desktop .deb into the user's home
-# directory on an rpm-ostree / bootc system (Bluefin, Silverblue, CoreOS...)
-# without dpkg, without layering, and without touching the base image.
+# Installs Anthropic's signed Claude Desktop .deb into the user's home
+# directory without dpkg, without root and without touching /usr. Built for
+# atomic systems (bootc / rpm-ostree), usable on any Linux with glibc >= 2.34
+# where vendor packages are unwanted in /usr. Not affiliated with Anthropic.
 #
-# Trust chain (nothing is trusted on faith):
-#   1. signing key downloaded, fingerprint compared to the documented one
+# Trust chain (nothing is trusted on faith, every step fails closed):
+#   1. signing key downloaded, fingerprint compared to the pinned one
 #   2. key imported into an ISOLATED keyring (your ~/.gnupg is untouched)
-#   3. InRelease clearsig verified against that keyring only
-#   4. Packages index verified by SHA256 taken from the verified InRelease
-#   5. .deb verified by SHA256 taken from the verified Packages index
+#   3. InRelease must be one clear-signed block; signature verified against
+#      that keyring only
+#   4. Date / Valid-Until read from the verified content: expired or future
+#      index refused, and an index older than the last one verified refused
+#   5. Packages index verified by SHA256 from the verified InRelease
+#   6. version must be N(.N)*; a downgrade is refused
+#   7. .deb verified by SHA256 from the verified Packages index
+# Maintainer scripts are never executed. --allow-downgrade relaxes the two
+# rollback checks only, never the signature or Valid-Until.
+#
+# Host checks (--doctor, and after every install): glibc floor, user
+# namespaces incl. the Ubuntu 24.04+ AppArmor restriction, shared libraries
+# resolved from ELF NEEDED entries without running the payload, Secret
+# Service and xdg-desktop-portal.
 #
 # Everything lands under:
 #   ~/.local/share/claude-desktop/versions/<version>/   app payload
 #   ~/.local/share/claude-desktop/current               symlink (atomic swap)
+#   ~/.local/share/claude-desktop/package-meta/<ver>/   control data, records
+#   ~/.local/share/claude-desktop/state/                last verified index Date
 #   ~/.local/bin/claude-desktop                         launcher
 #   ~/.local/share/applications/claude-desktop.desktop  menu entry
 #   ~/.local/share/icons/hicolor/...                    icons
 #
-# Usage:
-#   ./claude-desktop-userland.sh              install or upgrade to latest
-#   ./claude-desktop-userland.sh --check      report installed vs. available
-#   ./claude-desktop-userland.sh --inspect    download latest, show package
-#                                             relations and maintainer scripts,
-#                                             diff against last seen; no install
-#   ./claude-desktop-userland.sh --force      reinstall even if up to date
-#   ./claude-desktop-userland.sh --uninstall  remove app (keeps ~/.config/Claude)
-#   ./claude-desktop-userland.sh --purge      remove app AND config/data
+# Options: run with --help (the README Usage section is the same text).
+# Tests: bash tests/run.sh
 # ---------------------------------------------------------------------------
 
 # Shell options are set in main(), so the file can be sourced by tests/ without

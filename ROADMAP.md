@@ -58,11 +58,3 @@ tested:
   distribution.
 - **"Works"** only when the application was actually launched and the sandbox
   confirmed on that distribution.
-
-## Small follow-ups
-
-- **Update the script header comment.** The block at the top of
-  `claude-desktop-userland.sh` still describes an rpm-ostree / bootc-only
-  installer and lists only the original options. It should match the current
-  scope (any glibc >= 2.34 distribution, host checks) and point to `--help`
-  for the option list instead of duplicating it.
