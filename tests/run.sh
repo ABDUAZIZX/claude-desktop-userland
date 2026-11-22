@@ -277,8 +277,53 @@ t_extract() {
     env PATH="$only" "$(command -v bash)" -c '. "$1"; pick_gpg' _ "$SCRIPT"
 }
 
+# --- repository freshness ----------------------------------------------------
+t_release_dates() {
+  local d="$WORK/rel"; mkdir -p "$d"
+  cat >"$d/Release.verified" <<'REL'
+Origin: Anthropic
+Suite: stable
+Date: Sat, 21 Nov 2026 21:15:46 +0000
+Valid-Until: Sat, 28 Nov 2026 21:15:46 UTC
+SHA256:
+ abc 123 main/binary-amd64/Packages
+
+Date: Thu, 01 Jan 2099 00:00:00 +0000
+REL
+  local date_e valid_e
+  date_e="$(to_epoch 'Sat, 21 Nov 2026 21:15:46 +0000')"
+  valid_e="$(to_epoch 'Sat, 28 Nov 2026 21:15:46 UTC')"
+  [ "$date_e" = 1795295746 ] && ok "Date parsed to epoch" || nok "Date parsed to epoch" "$date_e"
+  [ "$valid_e" = 1795900546 ] && ok "Valid-Until (UTC suffix) parsed to epoch" || nok "Valid-Until (UTC suffix) parsed to epoch" "$valid_e"
+  [ "$(release_field "$d/Release.verified" Date)" = 'Sat, 21 Nov 2026 21:15:46 +0000' ] \
+    && ok "release_field reads the first paragraph only" || nok "release_field reads the first paragraph only"
+
+  expect_rc 1 "Valid-Until: time after expiry rejected" check_release_validity "$date_e" "$valid_e" $((valid_e + 1))
+  expect_out 'expired' "Valid-Until: rejection says expired" check_release_validity "$date_e" "$valid_e" $((valid_e + 1))
+  expect_rc 0 "Valid-Until: time before expiry accepted" check_release_validity "$date_e" "$valid_e" $((valid_e - 1))
+  expect_rc 1 "Date > 10 min in the future rejected" check_release_validity "$date_e" "$valid_e" $((date_e - 601))
+  expect_rc 0 "Date 5 min in the future tolerated" check_release_validity "$date_e" "$valid_e" $((date_e - 300))
+
+  expect_rc 0 "freshness on verified file, inside window" verify_release_freshness "$d/Release.verified" $((date_e + 3600))
+  expect_rc 1 "freshness on verified file, after expiry" verify_release_freshness "$d/Release.verified" $((valid_e + 60))
+  sed '/^Valid-Until:/d' "$d/Release.verified" >"$d/novalid"
+  expect_rc 1 "missing Valid-Until fails closed" verify_release_freshness "$d/novalid" $((date_e + 3600))
+
+  # InRelease structure: one clear-signed block, nothing outside it
+  local good="$d/InRelease.good"
+  printf '%s\n' '-----BEGIN PGP SIGNED MESSAGE-----' 'Hash: SHA512' '' 'Date: x' \
+    '-----BEGIN PGP SIGNATURE-----' '' 'sig' '-----END PGP SIGNATURE-----' >"$good"
+  expect_rc 0 "well-formed InRelease accepted" inrelease_well_formed "$good"
+  { printf 'Valid-Until: Thu, 01 Jan 2099 00:00:00 UTC\n'; cat "$good"; } >"$d/InRelease.prefix"
+  expect_rc 1 "unsigned text before the signed block rejected" inrelease_well_formed "$d/InRelease.prefix"
+  { cat "$good"; printf 'Valid-Until: Thu, 01 Jan 2099 00:00:00 UTC\n'; } >"$d/InRelease.suffix"
+  expect_rc 1 "unsigned text after the signed block rejected" inrelease_well_formed "$d/InRelease.suffix"
+  cat "$good" "$good" >"$d/InRelease.double"
+  expect_rc 1 "two signed blocks rejected" inrelease_well_formed "$d/InRelease.double"
+}
+
 # Test groups register themselves here.
-TESTS=(t_sourcing t_apparmor t_libs t_extract)
+TESTS=(t_sourcing t_apparmor t_libs t_extract t_release_dates)
 
 for t in "${TESTS[@]}"; do "$t"; done
 

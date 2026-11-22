@@ -35,6 +35,9 @@
   accepted when `gpg` is absent
 - Secret Service: detection and warning only, `basic` is never selected
   automatically; documented as untested on bare window managers
+- `Valid-Until` enforced, and a `Date` more than 10 minutes in the future is
+  refused; both read from gpg's verified output only. `InRelease` must be a
+  single clear-signed block with no text outside it
 
 ## 1.0.0
 

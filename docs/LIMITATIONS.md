@@ -63,9 +63,12 @@ with a matching `.service` running the script with no arguments.
 
 ## Verification
 
-**`Valid-Until` is not enforced.** See the note in
-[TRUST-CHAIN.md](TRUST-CHAIN.md). A signed but stale `InRelease` would be
-accepted.
+**Freshness depends on the local clock.** `Valid-Until` is enforced: an
+expired index is refused, and so is one whose `Date` lies more than 10
+minutes in the future. Both fields are read from gpg's verified output only,
+and `InRelease` must be a single clear-signed block with nothing outside it.
+A badly wrong system clock makes either check misfire, in the safe direction
+(refusal). Missing `Date` or `Valid-Until` fields also cause a refusal.
 
 **No downgrade protection beyond version comparison.** The script installs the
 highest version in the index. If a compromised index legitimately signed by

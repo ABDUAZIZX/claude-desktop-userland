@@ -74,11 +74,14 @@ lines after the signed block and a naive parser would read them.
 distribution, plus the freshness fields (`Date`, `Valid-Until`) that APT would
 normally use for replay protection.
 
-**Note:** the script does not currently enforce `Valid-Until`. A network
-attacker able to serve a stale but genuinely signed `InRelease` could pin you to
-an older release. Given that the script also refuses to downgrade an existing
-install only by version comparison, treat this as a known gap rather than a
-solved problem. Enforcing it is a small awk addition if you want it.
+**Freshness (enforced).** Before the signature is checked, `InRelease` must
+be exactly one clear-signed block with nothing before or after it. After
+verification, `Date` and `Valid-Until` are read from `Release.verified` only:
+
+- `Valid-Until` in the past: refused. A stale but genuinely signed index
+  could otherwise pin you to an older release (replay).
+- `Date` more than 10 minutes ahead of the local clock: refused.
+- Either field missing or unparseable: refused.
 
 ## Link 4: Packages index
 

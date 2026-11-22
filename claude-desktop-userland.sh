@@ -502,6 +502,72 @@ run_host_checks() {
   check_misc
 }
 
+# --- repository freshness ----------------------------------------------------
+# Every field read here comes from gpg's output (Release.verified), never from
+# the raw InRelease: text outside the signed block is not trusted.
+
+RELEASE_MAX_FUTURE=600   # seconds a Date may lie ahead of the local clock
+
+# inrelease_well_formed FILE -- exactly one clear-signed block and nothing
+# outside it, so no unsigned text can sit next to the signed content.
+inrelease_well_formed() {
+  local f="$1" first last
+  first="$(head -n1 "$f")"
+  last="$(sed '/^[[:space:]]*$/d' "$f" | tail -n1)"
+  [ "$first" = "-----BEGIN PGP SIGNED MESSAGE-----" ] \
+    && [ "$last" = "-----END PGP SIGNATURE-----" ] \
+    && [ "$(grep -c '^-----BEGIN PGP SIGNED MESSAGE-----$' "$f")" = 1 ] \
+    && [ "$(grep -c '^-----BEGIN PGP SIGNATURE-----$' "$f")" = 1 ] \
+    && [ "$(grep -c '^-----END PGP SIGNATURE-----$' "$f")" = 1 ]
+}
+
+# release_field FILE FIELD -- value from the first paragraph of a Release file
+release_field() {
+  awk -v f="$2" '
+    /^[[:space:]]*$/ { exit }
+    index($0, f ":") == 1 { v = substr($0, length(f) + 2); sub(/^[ \t]+/, "", v); print v; exit }
+  ' "$1"
+}
+
+# to_epoch "Sat, 21 Nov 2026 21:15:46 +0000" -> seconds (GNU date)
+to_epoch() {
+  local e
+  e="$(date -u -d "$1" +%s 2>/dev/null)" || return 1
+  [[ "$e" =~ ^[0-9]+$ ]] || return 1
+  echo "$e"
+}
+
+# check_release_validity DATE-EPOCH VALID-UNTIL-EPOCH NOW-EPOCH
+check_release_validity() {
+  local date_e="$1" valid_e="$2" now="$3"
+  if [ "$now" -gt "$valid_e" ]; then
+    c_err "repository index expired: Valid-Until is $(date -u -d "@$valid_e" '+%F %T UTC'), now $(date -u -d "@$now" '+%F %T UTC')"
+    c_err "  a stale signed index can hide newer releases (replay); refusing"
+    return 1
+  fi
+  if [ "$date_e" -gt $((now + RELEASE_MAX_FUTURE)) ]; then
+    c_err "repository index Date $(date -u -d "@$date_e" '+%F %T UTC') is more than $((RELEASE_MAX_FUTURE / 60)) minutes in the future"
+    c_err "  check the system clock; refusing"
+    return 1
+  fi
+  return 0
+}
+
+# verify_release_freshness VERIFIED-RELEASE NOW-EPOCH
+# Sets RELEASE_DATE_EPOCH for later steps. Missing fields fail closed.
+verify_release_freshness() {
+  local f="$1" now="$2" d v
+  d="$(release_field "$f" Date)"
+  v="$(release_field "$f" Valid-Until)"
+  [ -n "$d" ] || { c_err "signed index has no Date field"; return 1; }
+  [ -n "$v" ] || { c_err "signed index has no Valid-Until field"; return 1; }
+  RELEASE_DATE_EPOCH="$(to_epoch "$d")" || { c_err "cannot parse Date: $d"; return 1; }
+  local valid_e
+  valid_e="$(to_epoch "$v")" || { c_err "cannot parse Valid-Until: $v"; return 1; }
+  check_release_validity "$RELEASE_DATE_EPOCH" "$valid_e" "$now" || return 1
+  c_ok "index fresh: Date $d, valid until $v"
+}
+
 # --- uninstall -------------------------------------------------------------
 do_uninstall() {
   local purge="${1:-no}"
@@ -626,9 +692,11 @@ mkdir -p "$GNUPGHOME"; chmod 700 "$GNUPGHOME"
 # --- 2. verify InRelease ---------------------------------------------------
 c_info "verifying repository index signature"
 curl -fsSLo InRelease "$REPO_BASE/dists/stable/InRelease" || die "could not download InRelease"
+inrelease_well_formed InRelease || die "InRelease is not a single clear-signed block; refusing"
 "$GPG" --batch --quiet --yes --output Release.verified --decrypt InRelease \
   || die "InRelease signature verification FAILED"
 c_ok "InRelease signature valid"
+verify_release_freshness Release.verified "$(date -u +%s)" || die "repository index failed the freshness check"
 
 # --- 3. verify Packages index ----------------------------------------------
 IDX_PATH="main/binary-${DEB_ARCH}/Packages"
