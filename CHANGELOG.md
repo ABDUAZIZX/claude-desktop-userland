@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.1.0 (unreleased)
+## 1.1.0 (2026-11-22)
 
 - `--inspect`: download and verify the latest package, print its
   `Depends`/`Recommends` and maintainer scripts (never executed), and diff them
