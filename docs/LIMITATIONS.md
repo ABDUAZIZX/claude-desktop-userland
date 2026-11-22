@@ -80,13 +80,29 @@ renderer sandbox fails to start. The official package solves this in its
 and keeps a setuid `chrome-sandbox` as a fallback. Neither reaches an install
 under `$HOME`.
 
-`--print-apparmor-profile` prints the equivalent profile attached to your
-install path, plus the two root commands that load it. `--doctor` and the
-launcher both warn while it is missing. Loading it is a conscious trade-off:
-the attachment path is writable by your user, so any process running as you can
-place a binary there and get user namespaces. That re-opens, for your account
-only, what the restriction closes. `CLAUDE_NO_SANDBOX=1` is the alternative,
-and it is worse.
+The options, in order of preference:
+
+1. **A userns profile for this install.** `--print-apparmor-profile` prints a
+   profile of the same form as Ubuntu's browser profiles (`abi <abi/4.0>`,
+   `flags=(unconfined)`, `userns,`), attached to your install path, plus the
+   two root commands that load and remove it. `--doctor` and the launcher both
+   warn while it is missing.
+2. **Last resort: `CLAUDE_NO_SANDBOX=1`.** This disables the Chromium sandbox
+   entirely. Web content rendered by the app is then no longer isolated from
+   your session.
+
+**The trade-off of option 1, stated plainly.** The attachment path is inside
+`$HOME` and writable by your user. Any code running with your privileges can
+place a binary at that path, and AppArmor will let it create user namespaces.
+That weakens the restriction for your account, which is the attack surface
+the restriction exists to reduce (unprivileged userns is a common
+kernel-exploit entry point). The official package does not have this weakness
+because it attaches to a root-owned path under `/usr`. Option 2 is still the
+larger loss, which is why it comes second.
+
+The restriction is detected through
+`/proc/sys/kernel/apparmor_restrict_unprivileged_userns`, which only exists on
+Ubuntu kernels. When the file is absent there is no restriction to handle.
 
 **Cowork needs more than `/dev/kvm`.** It runs its workspace inside a VM and
 looks for QEMU (`/usr/bin/qemu-system-<arch>`) and OVMF firmware at fixed paths

@@ -108,7 +108,7 @@ work here.
 
 | Variable | Effect |
 | --- | --- |
-| `CLAUDE_NO_SANDBOX=1` | Pass `--no-sandbox` to Chromium. Only if user namespaces are unavailable, and understand what you are giving up |
+| `CLAUDE_NO_SANDBOX=1` | Last resort. Passes `--no-sandbox`, which disables the Chromium sandbox entirely. On Ubuntu 24.04+ try `--print-apparmor-profile` first |
 | `CLAUDE_FORCE_X11=1` | Run under XWayland instead of the native Wayland backend |
 | `CLAUDE_PASSWORD_STORE=basic` | Pass `--password-store=basic`. For sessions without a Secret Service (bare window managers), where the login would otherwise not persist. The token is then stored with weak obfuscation only |
 

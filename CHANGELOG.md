@@ -19,6 +19,9 @@
   `CLAUDE_PASSWORD_STORE`
 - Cowork report no longer claims `/dev/kvm` is sufficient
 - `--uninstall` points at the AppArmor profile when one is installed
+- AppArmor: the restriction sysctl is optional (absent = unrestricted), the
+  profile output carries an explicit writable-path warning, and every message
+  lists the profile first and `CLAUDE_NO_SANDBOX=1` as the last resort
 
 ## 1.0.0
 
