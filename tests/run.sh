@@ -359,6 +359,18 @@ t_downgrade() {
   # the old environment variable must have no effect any more
   expect_out 'SKIP=0' "CLAUDE_SKIP_HOST_CHECK env var ignored" \
     env CLAUDE_SKIP_HOST_CHECK=1 bash -c '. "$1"; parse_args; echo "SKIP=$SKIP_HOST_CHECK"' _ "$SCRIPT"
+  expect_out 'no longer has any effect; use --skip-host-check' "legacy env var produces a warning" \
+    env CLAUDE_SKIP_HOST_CHECK=1 bash -c '. "$1"; warn_legacy_env' _ "$SCRIPT"
+  expect_out '^$' "no warning when the legacy env var is unset" \
+    env -u CLAUDE_SKIP_HOST_CHECK bash -c '. "$1"; warn_legacy_env' _ "$SCRIPT"
+  # end to end through main: warning shown, behaviour unchanged (still refused on old glibc)
+  local e2e
+  e2e="$(env CLAUDE_SKIP_HOST_CHECK=1 PATH="$fk/old:$PATH" HOME="$WORK/legacy-home" bash "$SCRIPT" 2>&1)"
+  if grep -q 'no longer has any effect' <<<"$e2e" && grep -q 'glibc too old' <<<"$e2e"; then
+    ok "main warns about the legacy var and still refuses old glibc"
+  else
+    nok "main warns about the legacy var and still refuses old glibc" "$e2e"
+  fi
 }
 
 # --- Date floor ---------------------------------------------------------------

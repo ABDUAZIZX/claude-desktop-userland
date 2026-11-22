@@ -16,6 +16,8 @@
   and removal instructions and the trade-off spelled out
 - glibc check before the download; `--skip-host-check` (install and
   `--force` only) skips the version floor only, never the musl refusal
+- `CLAUDE_SKIP_HOST_CHECK` has no effect; when set, a warning points to
+  `--skip-host-check`
 - Launcher: warns about the AppArmor restriction, honours
   `CLAUDE_PASSWORD_STORE`
 - Cowork report no longer claims `/dev/kvm` is sufficient

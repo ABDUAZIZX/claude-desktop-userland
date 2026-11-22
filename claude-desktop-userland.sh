@@ -1224,11 +1224,20 @@ c_ok "Claude Desktop $VER installed. Launch it from your app menu, or run: claud
 c_info "To update later, just run this script again (it is idempotent)."
 }
 
+# Retired environment variables are reported, never honoured.
+warn_legacy_env() {
+  if [ -n "${CLAUDE_SKIP_HOST_CHECK+set}" ]; then
+    c_warn "CLAUDE_SKIP_HOST_CHECK is set but no longer has any effect; use --skip-host-check"
+  fi
+  return 0
+}
+
 # --- main ------------------------------------------------------------------
 main() {
   set -euo pipefail
   umask 022
   parse_args "$@"
+  warn_legacy_env
   case "$MODE" in
     uninstall) do_uninstall no ;;
     purge)     do_uninstall purge ;;
