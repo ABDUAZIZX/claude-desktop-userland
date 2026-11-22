@@ -578,7 +578,9 @@ run_doctor() {
 
 step_preflight() {
 # --- preflight -------------------------------------------------------------
-for t in curl gpg sha256sum awk tar python3 find sed diff; do need "$t"; done
+for t in curl sha256sum awk find sed diff grep; do need "$t"; done
+GPG="$(pick_gpg)" || die "missing required tool: gpg (or gpg2)"
+AR_TOOL="$(pick_ar_tool)" || die "need one of bsdtar (libarchive), ar (binutils) or python3 to unpack the .deb"
 
 # Refuse before a 160 MB download on hosts that cannot load the binary at all.
 # The remaining checks run after installation, when there is a binary to test.
@@ -606,7 +608,7 @@ step_fetch_verified_index() {
 c_info "fetching Anthropic signing key"
 curl -fsSLo key.asc "$KEY_URL" || die "could not download signing key"
 
-GOT_FPR="$(gpg --with-colons --show-keys key.asc 2>/dev/null | awk -F: '/^fpr:/{print $10; exit}')"
+GOT_FPR="$("$GPG" --with-colons --show-keys key.asc 2>/dev/null | awk -F: '/^fpr:/{print $10; exit}')"
 [ -n "$GOT_FPR" ] || die "file is not a valid OpenPGP key"
 if [ "$GOT_FPR" != "$KEY_FPR" ]; then
   die "fingerprint mismatch!
@@ -618,13 +620,13 @@ c_ok "key fingerprint verified ($KEY_FPR)"
 
 export GNUPGHOME="$TMP/gnupg"
 mkdir -p "$GNUPGHOME"; chmod 700 "$GNUPGHOME"
-gpg --batch --quiet --import key.asc
+"$GPG" --batch --quiet --import key.asc
 # isolated keyring holds ONLY this key -> a good signature can only be Anthropic's
 
 # --- 2. verify InRelease ---------------------------------------------------
 c_info "verifying repository index signature"
 curl -fsSLo InRelease "$REPO_BASE/dists/stable/InRelease" || die "could not download InRelease"
-gpg --batch --quiet --yes --output Release.verified --decrypt InRelease \
+"$GPG" --batch --quiet --yes --output Release.verified --decrypt InRelease \
   || die "InRelease signature verification FAILED"
 c_ok "InRelease signature valid"
 
@@ -674,14 +676,158 @@ echo "$DEB_SHA  pkg.deb" | sha256sum -c --quiet - || die "package checksum misma
 c_ok "package checksum verified"
 }
 
-untar() {
+# --- .deb extraction ---------------------------------------------------------
+# A .deb is an ar archive holding control.tar[.ext] and data.tar[.ext]. Tools,
+# first available wins:
+#   bsdtar   reads the ar container and, when libarchive was built with the
+#            codec, the compressed tar as well
+#   ar       (binutils) container only; tar + an external decompressor unpack
+#   python3  container only, same external decompression as ar. Python's
+#            tarfile is never used, so its lack of zstd before 3.14 is moot.
+DEB_MEMBER_RE='^(control|data)\.tar(\.(xz|gz|zst))?$'
+
+pick_ar_tool() {
+  local t
+  for t in bsdtar ar python3; do
+    command -v "$t" >/dev/null 2>&1 && { echo "$t"; return 0; }
+  done
+  return 1
+}
+
+pick_gpg() {
+  local t
+  for t in gpg gpg2; do
+    command -v "$t" >/dev/null 2>&1 && { echo "$t"; return 0; }
+  done
+  return 1
+}
+
+# py_ar list DEB | py_ar extract DEB MEMBER OUTDIR -- minimal ar(5) reader
+py_ar() {
+  python3 -I - "$@" <<'PY'
+import os, sys
+mode, deb = sys.argv[1], sys.argv[2]
+with open(deb, 'rb') as f:
+    if f.read(8) != b'!<arch>\n':
+        sys.exit("not an ar archive")
+    while True:
+        hdr = f.read(60)
+        if len(hdr) < 60:
+            break
+        name = hdr[0:16].decode('ascii', 'replace').strip().rstrip('/')
+        size = int(hdr[48:58].decode('ascii').strip())
+        start = f.tell()
+        if mode == 'list':
+            print(name)
+        elif name == sys.argv[3]:
+            with open(os.path.join(sys.argv[4], name), 'wb') as o:
+                left = size
+                while left:
+                    chunk = f.read(min(1 << 20, left))
+                    if not chunk:
+                        sys.exit("truncated archive")
+                    o.write(chunk)
+                    left -= len(chunk)
+            sys.exit(0)
+        f.seek(start + size + (size % 2))
+if mode != 'list':
+    sys.exit("member not found: " + sys.argv[3])
+PY
+}
+
+# deb_list_members TOOL DEB
+deb_list_members() {
   case "$1" in
-    *.xz)  tar -xJf "$1" -C "$2" ;;
-    *.gz)  tar -xzf "$1" -C "$2" ;;
-    *.zst) need zstd; zstd -dc "$1" | tar -xf - -C "$2" ;;
-    *.tar) tar -xf  "$1" -C "$2" ;;
-    *) die "unknown compression: $1" ;;
+    bsdtar)  bsdtar -tf "$2" ;;
+    ar)      ar t "$2" ;;
+    python3) py_ar list "$2" ;;
+    *)       return 1 ;;
   esac
+}
+
+# deb_extract_member TOOL DEB MEMBER OUTDIR -- DEB and OUTDIR absolute
+deb_extract_member() {
+  [[ "$3" =~ $DEB_MEMBER_RE ]] || die "refusing unexpected archive member name: $3"
+  case "$1" in
+    bsdtar)  bsdtar -xf "$2" -C "$4" "$3" ;;
+    ar)      (cd "$4" && ar x "$2" "$3") ;;
+    python3) py_ar extract "$2" "$3" "$4" ;;
+    *)       return 1 ;;
+  esac
+}
+
+# tar_compression MEMBER -> xz | gz | zst | none
+tar_compression() {
+  case "$1" in
+    *.tar.xz)  echo xz ;;
+    *.tar.gz)  echo gz ;;
+    *.tar.zst) echo zst ;;
+    *.tar)     echo none ;;
+    *)         return 1 ;;
+  esac
+}
+
+decompressor_for() {
+  case "$1" in xz) echo xz ;; gz) echo gzip ;; zst) echo zstd ;; none) echo "" ;; *) return 1 ;; esac
+}
+
+# decompressor_pkg COMPRESSION FAMILY
+decompressor_pkg() {
+  case "$1:$2" in
+    xz:deb) echo xz-utils ;;
+    xz:*)   echo xz ;;
+    gz:*)   echo gzip ;;
+    zst:*)  echo zstd ;;
+  esac
+}
+
+# bsdtar_supports COMPRESSION -- libarchive lists its codecs in --version
+bsdtar_supports() {
+  local v
+  v="$(bsdtar --version 2>/dev/null)" || return 1
+  case "$1" in
+    none) return 0 ;;
+    xz)   grep -q 'liblzma' <<<"$v" ;;
+    gz)   grep -q 'zlib' <<<"$v" ;;
+    zst)  grep -q 'libzstd' <<<"$v" ;;
+    *)    return 1 ;;
+  esac
+}
+
+# unpack_method TOOL COMPRESSION -> "bsdtar" or "external"
+unpack_method() {
+  if [ "$1" = bsdtar ] && bsdtar_supports "$2"; then echo bsdtar; else echo external; fi
+}
+
+# require_unpackers TOOL COMPRESSION... -- every tool present before extracting anything
+require_unpackers() {
+  local tool="$1" comp dec missing=""
+  shift
+  for comp in "$@"; do
+    [ "$(unpack_method "$tool" "$comp")" = bsdtar ] && continue
+    command -v tar >/dev/null 2>&1 || missing="$missing tar"
+    dec="$(decompressor_for "$comp")" || die "unsupported payload compression: $comp"
+    if [ -n "$dec" ] && ! command -v "$dec" >/dev/null 2>&1; then
+      missing="$missing $dec (package: $(decompressor_pkg "$comp" "$(os_family)"))"
+    fi
+  done
+  [ -z "$missing" ] || die "cannot unpack the package, missing:$missing"
+}
+
+# unpack_tar_member TOOL FILE DEST
+unpack_tar_member() {
+  local comp dec
+  comp="$(tar_compression "$2")" || die "unsupported payload: $2"
+  if [ "$(unpack_method "$1" "$comp")" = bsdtar ]; then
+    bsdtar -xf "$2" -C "$3"
+    return
+  fi
+  dec="$(decompressor_for "$comp")"
+  if [ -z "$dec" ]; then
+    tar -xf "$2" -C "$3"
+  else
+    "$dec" -dc "$2" | tar -xf - -C "$3"
+  fi
 }
 
 # --- 6b. surface what dpkg would have done ---------------------------------
@@ -726,53 +872,26 @@ report_package_meta() {
 
 step_extract_package() {
 # --- 6. extract .deb without dpkg ------------------------------------------
-c_info "extracting"
-TARS="$(python3 - "$TMP/pkg.deb" "$TMP" <<'PY'
-import sys, os, re
-deb, outdir = sys.argv[1], sys.argv[2]
-data_path = control_path = None
-with open(deb, 'rb') as f:
-    if f.read(8) != b'!<arch>\n':
-        sys.exit("not a valid .deb (ar) archive")
-    while True:
-        hdr = f.read(60)
-        if len(hdr) < 60:
-            break
-        name = hdr[0:16].decode('ascii', 'replace').strip().rstrip('/')
-        size = int(hdr[48:58].decode('ascii').strip())
-        start = f.tell()
-        if re.fullmatch(r'(data|control)\.tar(\.[a-z0-9]+)?', name):
-            out = os.path.join(outdir, name)
-            with open(out, 'wb') as o:
-                left = size
-                while left:
-                    chunk = f.read(min(1 << 20, left))
-                    if not chunk:
-                        sys.exit("truncated archive")
-                    o.write(chunk); left -= len(chunk)
-            if name.startswith('data'):
-                data_path = out
-            else:
-                control_path = out
-        f.seek(start + size + (size % 2))
-if not data_path or not control_path:
-    sys.exit("data.tar or control.tar member not found in .deb")
-print(data_path)
-print(control_path)
-PY
-)" || die "could not unpack the .deb container"
+c_info "extracting (container via $AR_TOOL)"
+local members data_m control_m
+members="$(deb_list_members "$AR_TOOL" "$TMP/pkg.deb")" || die "could not read the .deb container"
+data_m="$(grep -E '^data\.tar' <<<"$members" | head -n1 || true)"
+control_m="$(grep -E '^control\.tar' <<<"$members" | head -n1 || true)"
+[ -n "$data_m" ] && [ -n "$control_m" ] || die "data.tar or control.tar member not found in .deb"
+require_unpackers "$AR_TOOL" "$(tar_compression "$control_m")" "$(tar_compression "$data_m")"
 
-DATA_TAR="${TARS%%$'\n'*}"
-CONTROL_TAR="${TARS##*$'\n'}"
+mkdir -p "$TMP/members"
+deb_extract_member "$AR_TOOL" "$TMP/pkg.deb" "$control_m" "$TMP/members" || die "could not extract $control_m"
+deb_extract_member "$AR_TOOL" "$TMP/pkg.deb" "$data_m" "$TMP/members"    || die "could not extract $data_m"
 
 CTRL="$TMP/control"; mkdir -p "$CTRL"
-untar "$CONTROL_TAR" "$CTRL"
+unpack_tar_member "$AR_TOOL" "$TMP/members/$control_m" "$CTRL" || die "could not unpack $control_m"
 [ -f "$CTRL/control" ] || die "control file missing from package"
 report_package_meta "$CTRL"
 [ "$MODE" = "inspect" ] && return 0
 
 ROOT="$TMP/root"; mkdir -p "$ROOT"
-untar "$DATA_TAR" "$ROOT"
+unpack_tar_member "$AR_TOOL" "$TMP/members/$data_m" "$ROOT" || die "could not unpack $data_m"
 c_ok "payload extracted"
 }
 

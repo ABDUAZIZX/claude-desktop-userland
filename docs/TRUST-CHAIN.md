@@ -133,8 +133,10 @@ Being explicit about the residual trust:
   are running Anthropic's Electron app with your user's privileges and your
   user's file access.
 - **TLS and the CA set** for the initial key fetch, before pinning can help.
-- **The local toolchain**: `gpg`, `curl`, `sha256sum`, `python3`, `tar` from
-  the base image.
+- **The local toolchain**: `gpg`, `curl`, `sha256sum`, and whichever unpacker
+  is used (`bsdtar`, or `ar`/`python3` with `tar` and `xz`/`zstd`/`gzip`) from
+  the base image. Archive member names are checked against
+  `(control|data).tar[.xz|.gz|.zst]` before anything is extracted.
 - **`$TMPDIR`.** On a shared machine with a world-writable `/tmp` and no
   `mktemp` privacy, a local attacker could in principle race the extracted
   payload. `mktemp -d` creates mode 0700 directories, which closes the ordinary

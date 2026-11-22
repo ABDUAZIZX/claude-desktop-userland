@@ -188,8 +188,97 @@ FAKE
   fi
 }
 
+# --- .deb extraction chain ---------------------------------------------------
+# ar_pack OUT FILE... -- writes a System V ar archive (the .deb container format)
+ar_pack() {
+  local out="$1" f name size
+  shift
+  printf '!<arch>\n' >"$out"
+  for f in "$@"; do
+    name="$(basename "$f")"; size="$(stat -c %s "$f")"
+    printf '%-16s%-12s%-6s%-6s%-8s%-10s`\n' "$name/" 0 0 0 100644 "$size" >>"$out"
+    cat "$f" >>"$out"
+    [ $((size % 2)) = 1 ] && printf '\n' >>"$out"
+  done
+  return 0
+}
+
+# make_deb OUT DATA-COMPRESSION -- control.tar.xz + data.tar.<comp>
+make_deb() {
+  local out="$1" comp="$2" src="$WORK/debsrc.$2"
+  rm -rf "$src"; mkdir -p "$src/ctl" "$src/data/usr/lib/claude-desktop" "$src/m"
+  printf 'Package: claude-desktop\nVersion: 9.9.9\n' >"$src/ctl/control"
+  printf 'payload\n' >"$src/data/usr/lib/claude-desktop/marker"
+  tar -C "$src/ctl" -cf - . | xz -c >"$src/m/control.tar.xz"
+  case "$comp" in
+    xz)   tar -C "$src/data" -cf - . | xz -c   >"$src/m/data.tar.xz" ;;
+    gz)   tar -C "$src/data" -cf - . | gzip -c >"$src/m/data.tar.gz" ;;
+    zst)  tar -C "$src/data" -cf - . | zstd -q -c >"$src/m/data.tar.zst" ;;
+    none) tar -C "$src/data" -cf "$src/m/data.tar" . ;;
+  esac
+  printf '2.0\n' >"$src/m/debian-binary"
+  ar_pack "$out" "$src/m/debian-binary" "$src/m/control.tar.xz" "$src/m"/data.tar*
+}
+
+# extract_with TOOL DEB DEST -- the same sequence step_extract_package runs
+extract_with() {
+  local tool="$1" deb="$2" dest="$3" members data_m control_m
+  mkdir -p "$dest/members" "$dest/control" "$dest/root"
+  members="$(deb_list_members "$tool" "$deb")" || return 1
+  data_m="$(grep -E '^data\.tar' <<<"$members" | head -n1)"
+  control_m="$(grep -E '^control\.tar' <<<"$members" | head -n1)"
+  require_unpackers "$tool" "$(tar_compression "$control_m")" "$(tar_compression "$data_m")"
+  deb_extract_member "$tool" "$deb" "$control_m" "$dest/members"
+  deb_extract_member "$tool" "$deb" "$data_m" "$dest/members"
+  unpack_tar_member "$tool" "$dest/members/$control_m" "$dest/control"
+  unpack_tar_member "$tool" "$dest/members/$data_m" "$dest/root"
+  grep -q 'Version: 9.9.9' "$dest/control/control" \
+    && grep -q payload "$dest/root/usr/lib/claude-desktop/marker"
+}
+
+t_extract() {
+  local d="$WORK/ex" tool comp deb n=0
+  mkdir -p "$d"
+  for comp in xz gz zst none; do
+    if [ "$comp" = zst ] && ! command -v zstd >/dev/null 2>&1; then
+      printf 'skip zstd fixtures (zstd not installed)\n'; continue
+    fi
+    deb="$d/test-$comp.deb"; make_deb "$deb" "$comp"
+    for tool in bsdtar ar python3; do
+      if ! command -v "$tool" >/dev/null 2>&1; then
+        printf 'skip %s path for %s (%s not installed)\n' "$tool" "$comp" "$tool"; continue
+      fi
+      n=$((n + 1))
+      expect_rc 0 "extract data.tar.$comp via $tool" extract_with "$tool" "$deb" "$d/out-$tool-$comp"
+    done
+  done
+  [ "$n" -gt 0 ] || nok "at least one extraction path exercised"
+
+  # member names outside control/data.tar[.ext] are refused before extraction
+  expect_out 'refusing unexpected archive member' "path-like member name refused" \
+    deb_extract_member python3 "$d/test-xz.deb" "../../etc/passwd" "$d"
+
+  # a missing decompressor stops before anything is extracted, naming the package
+  local nozstd="$d/nozstd" t src
+  mkdir -p "$nozstd"
+  for t in bash tar xz gzip grep cat; do src="$(command -v "$t")" && ln -sf "$src" "$nozstd/$t"; done
+  expect_out 'missing: zstd \(package: zstd\)' "missing zstd reported with package name" \
+    env PATH="$nozstd" "$(command -v bash)" -c '. "$1"; require_unpackers ar xz zst' _ "$SCRIPT"
+  expect_rc 0 "xz and gzip present -> no complaint" \
+    env PATH="$nozstd" "$(command -v bash)" -c '. "$1"; require_unpackers ar xz gz' _ "$SCRIPT"
+
+  # tool preference order and gpg2 fallback
+  local only="$d/only"; mkdir -p "$only"
+  for t in python3 bash; do src="$(command -v "$t")" && ln -sf "$src" "$only/$t"; done
+  expect_out '^python3$' "python3 chosen when bsdtar and ar are absent" \
+    env PATH="$only" "$(command -v bash)" -c '. "$1"; pick_ar_tool' _ "$SCRIPT"
+  printf '#!/bin/sh\nexit 0\n' >"$only/gpg2"; chmod +x "$only/gpg2"
+  expect_out '^gpg2$' "gpg2 accepted when gpg is absent" \
+    env PATH="$only" "$(command -v bash)" -c '. "$1"; pick_gpg' _ "$SCRIPT"
+}
+
 # Test groups register themselves here.
-TESTS=(t_sourcing t_apparmor t_libs)
+TESTS=(t_sourcing t_apparmor t_libs t_extract)
 
 for t in "${TESTS[@]}"; do "$t"; done
 

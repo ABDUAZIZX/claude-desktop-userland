@@ -123,9 +123,14 @@ and input method behaviour that are otherwise broken under XWayland.
 
 ## Requirements
 
-- `curl`, `gpg`, `sha256sum`, `awk`, `tar`, `python3`, `find`, `sed`
-  (all present in the Bluefin/Silverblue base image)
-- `zstd` only if Anthropic ever switches the payload to `data.tar.zst`
+- `curl`, `gpg` (or `gpg2`), `sha256sum`, `awk`, `find`, `sed`, `diff`, `grep`
+- One tool to open the `.deb` container, first found wins: `bsdtar`
+  (libarchive), `ar` (binutils), or `python3`
+- Unless `bsdtar` handles the codec itself: `tar` plus the decompressor for the
+  payload, `xz` (`xz-utils` on Debian/Ubuntu), `zstd` or `gzip`. A missing
+  one is reported with its package name before anything is extracted
+- `readelf` or `objdump` (binutils) for the shared-library check; without them
+  that one check is skipped
 - x86_64 or aarch64
 - glibc 2.34 or newer. musl systems (Alpine, Void-musl) and older releases
   (Debian 11, RHEL/Alma/Rocky 8) are refused before anything is downloaded

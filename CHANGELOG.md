@@ -27,6 +27,12 @@
   `ldconfig -p` (ABI-filtered). Package table limited to Electron's direct
   `NEEDED` set; apt names chosen by `apt-cache`; unknown sonames get a
   per-family search command
+- `.deb` container opened with `bsdtar`, then `ar`, then `python3`;
+  decompression by `bsdtar` when libarchive has the codec, otherwise `tar`
+  plus `xz`/`zstd`/`gzip`, all checked before extraction starts. Python's
+  `tarfile` is never used. Member names validated before extraction.
+  `python3` and `tar` are no longer unconditional requirements; `gpg2` is
+  accepted when `gpg` is absent
 
 ## 1.0.0
 
