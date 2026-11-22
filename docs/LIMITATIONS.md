@@ -10,9 +10,11 @@ a distrobox container instead.
 Silverblue or Kinoite base image the Electron dependency set (glibc, GTK3,
 `libnss3`, `libatk`, `libdrm`, Mesa, PipeWire/ALSA) is already present, so the
 practical failure rate is near zero. On a stripped-down image or inside a
-minimal container you will get a dynamic linker error at launch, not at install
-time. `ldd ~/.local/share/claude-desktop/current/<binary>` will tell you which
-library is missing.
+minimal container libraries will be missing. The installer runs `ldd` after
+every install, and `--doctor` repeats the check at any time, mapping each
+missing soname to a package name for apt, dnf, pacman or zypper. The mapping
+covers the libraries Electron needs and is a hint, not a resolver. A glibc
+older than 2.34, or no glibc at all, stops the install before the download.
 
 **Maintainer scripts never run.** `preinst`, `postinst`, `prerm` and `postrm`
 are not extracted and not executed. Consequences:
@@ -69,10 +71,34 @@ output alone.
 resort, since it removes the process isolation between web content and your
 session.
 
-**The Cowork tab needs `/dev/kvm`.** It runs its workspace inside a VM. If
-virtualization is disabled in firmware, or your user is not in the `kvm` group,
-that tab will not function. The rest of the application is unaffected. The
-script reports the state of `/dev/kvm` at the end of an install.
+### AppArmor on Ubuntu 24.04+
+
+Ubuntu 24.04 and later set `kernel.apparmor_restrict_unprivileged_userns=1`.
+Unconfined processes can then no longer create user namespaces, and the
+renderer sandbox fails to start. The official package solves this in its
+`postinst` with an AppArmor profile attached to `/usr/lib/claude-desktop/...`,
+and keeps a setuid `chrome-sandbox` as a fallback. Neither reaches an install
+under `$HOME`.
+
+`--print-apparmor-profile` prints the equivalent profile attached to your
+install path, plus the two root commands that load it. `--doctor` and the
+launcher both warn while it is missing. Loading it is a conscious trade-off:
+the attachment path is writable by your user, so any process running as you can
+place a binary there and get user namespaces. That re-opens, for your account
+only, what the restriction closes. `CLAUDE_NO_SANDBOX=1` is the alternative,
+and it is worse.
+
+**Cowork needs more than `/dev/kvm`.** It runs its workspace inside a VM and
+looks for QEMU (`/usr/bin/qemu-system-<arch>`) and OVMF firmware at fixed paths
+under `/usr`. An atomic image without them cannot provide them from userland.
+The rest of the application is unaffected. `--doctor` reports whether all three
+are present.
+
+**Secret Service.** The login token is stored through the Secret Service API
+(gnome-keyring, KWallet, KeePassXC). Without one on the session bus, as is
+common on bare window managers, you are asked to sign in on every launch.
+`--doctor` checks for it. `CLAUDE_PASSWORD_STORE=basic` is the fallback, at the
+cost of weak obfuscation on disk.
 
 **SELinux.** Payloads under `~/.local/share` are labelled `data_home_t` and
 Electron runs fine. If you relocate the install to a non-standard mount point,

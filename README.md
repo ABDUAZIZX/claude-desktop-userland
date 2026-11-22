@@ -93,6 +93,9 @@ ln -sfn ~/.local/share/claude-desktop/versions/<older> \
 | `./claude-desktop-userland.sh` | Install, or upgrade if a newer version exists |
 | `./claude-desktop-userland.sh --check` | Compare installed vs. available, change nothing |
 | `./claude-desktop-userland.sh --force` | Reinstall the current version |
+| `./claude-desktop-userland.sh --inspect` | Download and verify the latest package, show its `Depends` and maintainer scripts and diff them against the last version seen. Installs nothing |
+| `./claude-desktop-userland.sh --doctor` | Check this host can run the app: glibc, sandbox, shared libraries, keyring, portals. Offline, changes nothing, exits non-zero on a blocking problem |
+| `./claude-desktop-userland.sh --print-apparmor-profile` | Print an AppArmor profile for hosts that restrict user namespaces (Ubuntu 24.04+), with install instructions |
 | `./claude-desktop-userland.sh --uninstall` | Remove the app, keep `~/.config/Claude` |
 | `./claude-desktop-userland.sh --purge` | Remove the app and its configuration |
 | `./claude-desktop-userland.sh --help` | Usage text |
@@ -107,6 +110,10 @@ work here.
 | --- | --- |
 | `CLAUDE_NO_SANDBOX=1` | Pass `--no-sandbox` to Chromium. Only if user namespaces are unavailable, and understand what you are giving up |
 | `CLAUDE_FORCE_X11=1` | Run under XWayland instead of the native Wayland backend |
+| `CLAUDE_PASSWORD_STORE=basic` | Pass `--password-store=basic`. For sessions without a Secret Service (bare window managers), where the login would otherwise not persist. The token is then stored with weak obfuscation only |
+
+The installer itself honours `CLAUDE_SKIP_HOST_CHECK=1`, which skips the glibc
+check that otherwise stops an install before the download.
 
 Under a Wayland session the launcher adds `--ozone-platform-hint=auto` and
 `--enable-features=WaylandWindowDecorations`, which fixes fractional scaling
@@ -120,13 +127,18 @@ and input method behaviour that are otherwise broken under XWayland.
   (all present in the Bluefin/Silverblue base image)
 - `zstd` only if Anthropic ever switches the payload to `data.tar.zst`
 - x86_64 or aarch64
+- glibc 2.34 or newer. musl systems (Alpine, Void-musl) and older releases
+  (Debian 11, RHEL/Alma/Rocky 8) are refused before anything is downloaded
 - Unprivileged user namespaces enabled (`/proc/sys/user/max_user_namespaces >= 1`),
-  which is the Fedora default
-- The Electron runtime libraries, which the base image already provides:
-  glibc, GTK3, `libnss3`, `libatk`, `libdrm`, Mesa, and an audio stack
+  which is the Fedora default. On Ubuntu 24.04+ the AppArmor userns restriction
+  also applies: see `--print-apparmor-profile` and
+  [docs/LIMITATIONS.md](docs/LIMITATIONS.md#apparmor-on-ubuntu-2404)
+- The Electron runtime libraries (GTK3, NSS, ATK/AT-SPI, Mesa GBM, X11 client
+  libraries, ALSA). Desktop images ship them; minimal ones do not
 
-The script prints an environment report at the end covering PATH, `/dev/kvm`
-and user namespaces.
+After every install the script runs the same checks as `--doctor`. Missing
+shared libraries are found with `ldd` and translated into an install command
+for apt, dnf, pacman or zypper.
 
 ---
 
@@ -135,9 +147,9 @@ and user namespaces.
 Read [docs/LIMITATIONS.md](docs/LIMITATIONS.md) before relying on this. The
 short version:
 
-- **No dependency resolution.** `dpkg` is not involved, so nothing checks that
-  the shared libraries Electron needs are present. On a full desktop image they
-  are. In a minimal container they are not.
+- **No dependency resolution.** `dpkg` is not involved. `--doctor` checks the
+  shared libraries with `ldd` and prints the packages to install, but it
+  installs nothing itself.
 - **Maintainer scripts are not executed.** `postinst` never runs. In practice
   this only costs the setuid bit on `chrome-sandbox`, which is deliberate:
   the launcher relies on unprivileged user namespaces instead.
