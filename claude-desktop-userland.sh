@@ -682,8 +682,11 @@ check_date_floor() {
 }
 
 # save_release_date STATE-FILE DATE-EPOCH -- keeps the maximum, written atomically.
-# Called only after the whole chain verified, so the floor never moves on a
-# partial or failed run, and never moves backwards (even with --allow-downgrade).
+# Called right after the signed InRelease (Date, Valid-Until, floor) and the
+# Packages index it pins have both verified, in every mode that fetches the
+# index: install, --force, --check, --inspect, and when already up to date.
+# Never on an index that failed verification, and never moves backwards (even
+# with --allow-downgrade).
 save_release_date() {
   local f="$1" new="$2" saved
   saved="$(read_saved_release_date "$f")" || return 1
@@ -877,6 +880,8 @@ EOF
 curl -fsSLo Packages "$REPO_BASE/dists/stable/$IDX_PATH" || die "could not download Packages"
 echo "$IDX_SHA  Packages" | sha256sum -c --quiet - || die "Packages checksum mismatch"
 c_ok "package index verified"
+# InRelease and the Packages index it pins are verified: raise the Date floor
+save_release_date "$RELEASE_DATE_STATE" "$RELEASE_DATE_EPOCH" || die "could not record the verified index Date"
 }
 
 step_select_package() {
@@ -1331,8 +1336,6 @@ main() {
   fi
 
   step_download_package
-  # key, InRelease, Packages and .deb all verified: raise the Date floor
-  save_release_date "$RELEASE_DATE_STATE" "$RELEASE_DATE_EPOCH" || die "could not record the verified index Date"
   step_extract_package
   [ "$MODE" = "inspect" ] && return 0
   step_locate_app

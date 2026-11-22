@@ -493,8 +493,132 @@ t_version_format() {
   fi
 }
 
+# --- offline trust chain: Date floor raised in every mode ---------------------
+# A throwaway gpg key signs a real InRelease; a fake curl serves it, the key,
+# the Packages index and a small .deb from local files. main() then runs
+# unmodified, with KEY_FPR/REPO_BASE pointed at the fixture.
+make_repo_fixture() {
+  local fx="$1" date_e="$2" ver="$3" arch gh pkgsha pkgsize relsha
+  case "$(uname -m)" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; *) return 1 ;; esac
+  mkdir -p "$fx/gnupg" "$fx/srv/pool"; chmod 700 "$fx/gnupg"
+  gh="$fx/gnupg"
+  if [ ! -f "$fx/srv/key.asc" ]; then
+    GNUPGHOME="$gh" gpg --batch --quiet --passphrase '' --quick-gen-key 'cdu test <test@example.invalid>' ed25519 sign never 2>/dev/null || return 1
+    GNUPGHOME="$gh" gpg --batch --quiet --armor --export 2>/dev/null >"$fx/srv/key.asc"
+    GNUPGHOME="$gh" gpg --batch --with-colons --list-keys 2>/dev/null | awk -F: '/^fpr:/{print $10; exit}' >"$fx/fpr"
+  fi
+  make_deb "$fx/srv/pool/pkg.deb" xz
+  pkgsha="$(sha256sum "$fx/srv/pool/pkg.deb" | cut -d' ' -f1)"
+  printf 'Package: claude-desktop\nVersion: %s\nArchitecture: %s\nFilename: pool/pkg.deb\nSHA256: %s\n\n' \
+    "$ver" "$arch" "$pkgsha" >"$fx/srv/Packages"
+  pkgsize="$(stat -c %s "$fx/srv/Packages")"; relsha="$(sha256sum "$fx/srv/Packages" | cut -d' ' -f1)"
+  {
+    printf 'Origin: Test\nSuite: stable\n'
+    printf 'Date: %s\n' "$(date -u -R -d "@$date_e")"
+    printf 'Valid-Until: %s\n' "$(date -u -R -d "@$((date_e + 7 * 86400))")"
+    printf 'SHA256:\n %s %s main/binary-%s/Packages\n' "$relsha" "$pkgsize" "$arch"
+  } >"$fx/Release"
+  # a failure here surfaces as a missing InRelease in the assertions below
+  GNUPGHOME="$gh" gpg --batch --quiet --yes --clearsign --digest-algo SHA512 -o "$fx/srv/InRelease" "$fx/Release" 2>/dev/null
+}
+
+# run_main_offline FIXTURE HOME ARGS... -- main() against the fixture, no network
+run_main_offline() {
+  local fx="$1" home="$2"; shift 2
+  local fcurl="$fx/bin"
+  mkdir -p "$fcurl"
+  # fake curl: last arg is the URL, "-o FILE" or "-...o FILE" gives the output
+  cat >"$fcurl/curl" <<FAKE
+#!/bin/sh
+out=""; url=""; prev=""
+for a in "\$@"; do
+  case "\$prev" in -o|-*o) out="\$a" ;; esac
+  prev="\$a"; url="\$a"
+done
+case "\$url" in
+  */key.asc)                  cp "$fx/srv/key.asc" "\$out" ;;
+  */dists/stable/InRelease)   cp "$fx/srv/InRelease" "\$out" ;;
+  */dists/stable/main/*/Packages) cp "$fx/srv/Packages" "\$out" ;;
+  */pool/pkg.deb)             cp "$fx/srv/pool/pkg.deb" "\$out" ;;
+  *) echo "fake curl: unexpected URL \$url" >&2; exit 22 ;;
+esac
+FAKE
+  chmod +x "$fcurl/curl"
+  env HOME="$home" PATH="$fcurl:$PATH" bash -c '
+    . "$1"; shift
+    KEY_FPR="$(cat "$FX/fpr")"
+    REPO_BASE="https://fixture.invalid/apt/stable"
+    main "$@"' _ "$SCRIPT" "$@" 2>&1
+}
+
+t_date_floor_modes() {
+  if ! command -v gpg >/dev/null 2>&1; then
+    skip "offline trust chain (Date floor per mode)" "gpg not installed"; return 0
+  fi
+  local fx="$WORK/repo" now date1 date2 st mode out home
+  now="$(date -u +%s)"; date1=$((now - 3600)); date2=$((now - 60))
+  make_repo_fixture "$fx" "$date1" 1.2.3 || { nok "build signed repository fixture"; return 0; }
+  # the subshell in run_main_offline reads the fixture path from FX
+  export FX="$fx"
+
+  for mode in --check --inspect --force install; do
+    home="$WORK/h${mode//-/}"; mkdir -p "$home"
+    st="$home/.local/share/claude-desktop/state/last-release-date"
+    if [ "$mode" = install ]; then
+      # pretend 1.2.3 is installed: the run ends with "already up to date"
+      mkdir -p "$home/.local/share/claude-desktop/versions/1.2.3"
+      ln -sfn "$home/.local/share/claude-desktop/versions/1.2.3" "$home/.local/share/claude-desktop/current"
+      out="$(run_main_offline "$fx" "$home")"
+      grep -q 'already up to date' <<<"$out" || nok "fixture run reaches 'already up to date'" "$out"
+    else
+      out="$(run_main_offline "$fx" "$home" "$mode")"
+    fi
+    local label="${mode#--} mode"
+    [ "$mode" = install ] && label="install mode, already up to date"
+    if [ "$(cat "$st" 2>/dev/null)" = "$date1" ]; then
+      ok "Date floor raised in $label"
+    else
+      nok "Date floor raised in $label" "state=$(cat "$st" 2>/dev/null) want=$date1: $(tail -n 5 <<<"$out")"
+    fi
+  done
+
+  # a newer index raises the floor even in --check
+  home="$WORK/hcheck"; st="$home/.local/share/claude-desktop/state/last-release-date"
+  make_repo_fixture "$fx" "$date2" 1.2.3
+  run_main_offline "$fx" "$home" --check >/dev/null
+  [ "$(cat "$st")" = "$date2" ] && ok "newer index raises the floor in check mode" || nok "newer index raises the floor in check mode" "$(cat "$st")"
+
+  # an older index is refused and the floor stays
+  make_repo_fixture "$fx" "$date1" 1.2.3
+  out="$(run_main_offline "$fx" "$home" --check)"
+  if grep -q 'older repository index refused' <<<"$out" && [ "$(cat "$st")" = "$date2" ]; then
+    ok "older index refused, floor unchanged"
+  else
+    nok "older index refused, floor unchanged" "state=$(cat "$st"): $(tail -n 3 <<<"$out")"
+  fi
+  # with --allow-downgrade it passes, and the floor still does not move back
+  out="$(run_main_offline "$fx" "$home" --check --allow-downgrade)"
+  if grep -q 'OLDER INDEX' <<<"$out" && [ "$(cat "$st")" = "$date2" ]; then
+    ok "--allow-downgrade accepts the older index without lowering the floor"
+  else
+    nok "--allow-downgrade accepts the older index without lowering the floor" "state=$(cat "$st"): $(tail -n 3 <<<"$out")"
+  fi
+
+  # a bad signature never touches the floor
+  home="$WORK/hbadsig"; st="$home/.local/share/claude-desktop/state/last-release-date"; mkdir -p "$home"
+  make_repo_fixture "$fx" "$date2" 1.2.3
+  sed -i 's/^Suite: stable$/Suite: tampered/' "$fx/srv/InRelease"
+  out="$(run_main_offline "$fx" "$home" --check)"
+  if grep -q 'signature verification FAILED' <<<"$out" && [ ! -e "$st" ]; then
+    ok "tampered InRelease refused, no Date recorded"
+  else
+    nok "tampered InRelease refused, no Date recorded" "$(tail -n 3 <<<"$out")"
+  fi
+  unset FX
+}
+
 # Test groups register themselves here.
-TESTS=(t_sourcing t_apparmor t_libs t_extract t_release_dates t_downgrade t_date_floor t_skip_record t_readme t_version_format)
+TESTS=(t_sourcing t_apparmor t_libs t_extract t_release_dates t_downgrade t_date_floor t_skip_record t_readme t_version_format t_date_floor_modes)
 
 for t in "${TESTS[@]}"; do "$t"; done
 

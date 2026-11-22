@@ -50,9 +50,11 @@
 - Downgrade refused when the repository's newest version is older than the
   installed one; `--allow-downgrade` overrides with a warning (never the
   signature or `Valid-Until`). Options are parsed as one mode plus modifiers
-- Index `Date` floor: the newest verified `Date` is saved after the full
-  chain verifies, and an older index is refused (`--allow-downgrade`
-  overrides with a warning). The saved value never decreases
+- Index `Date` floor: the newest verified `Date` is saved once `InRelease`
+  and `Packages` verify, in every mode that fetches the index (including
+  `--check` and "already up to date"), and an older index is refused
+  (`--allow-downgrade` overrides with a warning). The saved value never
+  decreases
 
 ## 1.0.0
 

@@ -71,9 +71,10 @@ A badly wrong system clock makes either check misfire, in the safe direction
 (refusal). Missing `Date` or `Valid-Until` fields also cause a refusal.
 
 **The `Date` floor is local and resettable.** The newest verified `Date` is
-kept in `~/.local/share/claude-desktop/state/`. It is raised only when a
-`.deb` is downloaded and verified, so runs that end with "already up to date"
-do not move it. `--uninstall` removes it with the rest of the install, and
+kept in `~/.local/share/claude-desktop/state/`. It is raised on every run
+that verifies `InRelease` and the `Packages` index, `--check` and "already up
+to date" included, so it tracks the newest index this machine has seen.
+`--uninstall` removes it with the rest of the install, and
 anything that can write to your home directory can edit it. A corrupt state
 file stops the install until you delete it.
 

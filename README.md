@@ -17,7 +17,7 @@ before running it:
 
 ```
 curl -fsSLO https://raw.githubusercontent.com/ABDUAZIZX/claude-desktop-userland/v1.1.0/claude-desktop-userland.sh
-echo "162d1f16fe51ca844aa2e444236e200d08bbd8ebad282deec1c4b4ef597796e9  claude-desktop-userland.sh" | sha256sum -c -
+echo "cf0746f0cde1306c02497776211522a64d487c9bea40e8dc71954b63cd42c57e  claude-desktop-userland.sh" | sha256sum -c -
 chmod +x claude-desktop-userland.sh
 ./claude-desktop-userland.sh --doctor   # optional: host check, offline
 ./claude-desktop-userland.sh
@@ -329,10 +329,12 @@ then this method, and layering last.
   so is one whose `Date` is more than 10 minutes in the future. Both fields
   are read only from the content gpg verified; `InRelease` must be a single
   clear-signed block with nothing outside it.
-- **An index older than the last one verified is refused.** After a fully
-  verified download the index `Date` is stored in
-  `~/.local/share/claude-desktop/state/`; a later index with an older `Date`
-  is rejected as a possible rollback. The stored value never decreases.
+- **An index older than the last one verified is refused.** Once `InRelease`
+  and the `Packages` index it pins have verified, the index `Date` is stored
+  in `~/.local/share/claude-desktop/state/`, in every mode that fetches the
+  index (install, `--force`, `--check`, `--inspect`, and when already up to
+  date). A later index with an older `Date` is rejected as a possible
+  rollback. The stored value never decreases.
 - **Downgrades are refused.** If the newest version in the signed index is
   older than the installed one, the install stops.
 - `--allow-downgrade` overrides the last two, with a warning. Nothing
