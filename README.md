@@ -1,18 +1,33 @@
-# Install Official Claude Desktop on Bluefin/Silverblue - Zero Layering, No Root, Pure Userland
+# Unofficial Userland Installer for the Official Claude Desktop - Zero Layering, No Root
+
+> **Unofficial.** This installer is not made, endorsed or supported by
+> Anthropic. What it installs is Anthropic's official, signed Claude Desktop
+> package, verified and unpacked without modification.
 
 A single Bash script that installs Anthropic's **official** Claude Desktop `.deb`
 into your home directory on an rpm-ostree / bootc system, without `dpkg`,
 without `rpm-ostree install`, and without ever asking for `sudo`.
 
-Tested on Bluefin GDX. The approach applies to any immutable Fedora variant
-(Silverblue, Kinoite, Bazzite, uBlue images, Fedora CoreOS) and works just as
-well on a mutable distro where you simply do not want vendor packages in `/usr`.
+Tested on Bluefin LTS (see [Compatibility](#compatibility)). The approach is
+meant for immutable systems and works just as well on a mutable distro where
+you simply do not want vendor packages in `/usr`.
+
+Install from the `v1.1.0` tag, not from `main`, and check the script's SHA256
+before running it:
 
 ```
-curl -fsSLO https://raw.githubusercontent.com/ABDUAZIZX/claude-desktop-userland/main/claude-desktop-userland.sh
+curl -fsSLO https://raw.githubusercontent.com/ABDUAZIZX/claude-desktop-userland/v1.1.0/claude-desktop-userland.sh
+echo "449328f50ea9f0f41c6d725c34b259f4b6e866c5c8d3f3822250ad1edc52607c  claude-desktop-userland.sh" | sha256sum -c -
 chmod +x claude-desktop-userland.sh
+./claude-desktop-userland.sh --doctor   # optional: host check, offline
 ./claude-desktop-userland.sh
 ```
+
+`sha256sum -c` must print `claude-desktop-userland.sh: OK`; anything else means
+the file is not the tagged release, so do not run it. The hash and the script
+come from the same repository, so this guards against a corrupted or
+substituted download and pins you to the reviewed release; it is not a second,
+independent signature.
 
 No pipe-to-shell one-liner is offered on purpose. Read the script first.
 
@@ -31,7 +46,7 @@ three are bad:
 | Unofficial repackaging (AppImage/Flatpak from third parties) | You stop running Anthropic's signed binary |
 
 This script takes a fourth route: verify the vendor's own artifact against the
-vendor's own signature, unpack it with Python instead of `dpkg`, and drop the
+vendor's own signature, unpack it without `dpkg`, and drop the
 payload into `~/.local/share`. The base image stays untouched, so
 `bootc upgrade` / `rpm-ostree upgrade` never has to reconcile anything.
 
@@ -49,8 +64,9 @@ payload into `~/.local/share`. The base image stays untouched, so
    downloads the index and checks it.
 5. Reads the SHA256 of the `.deb` **from the verified index**, downloads the
    package and checks it.
-6. Parses the `.deb` `ar` container in pure Python, extracts `data.tar.*`,
-   locates the Electron app root by finding `resources/app.asar`.
+6. Opens the `.deb` `ar` container with `bsdtar`, `ar` or `python3` (first
+   found), extracts `data.tar.*`, and locates the Electron app root by finding
+   `resources/app.asar`.
 7. Copies the payload to `~/.local/share/claude-desktop/versions/<version>/`
    and flips the `current` symlink.
 8. Writes a launcher wrapper, a `.desktop` entry, and the icon set.
@@ -88,18 +104,43 @@ ln -sfn ~/.local/share/claude-desktop/versions/<older> \
 
 ## Usage
 
-| Command | Effect |
-| --- | --- |
-| `./claude-desktop-userland.sh` | Install, or upgrade if a newer version exists |
-| `./claude-desktop-userland.sh --check` | Compare installed vs. available, change nothing |
-| `./claude-desktop-userland.sh --force` | Reinstall the current version |
-| `./claude-desktop-userland.sh --inspect` | Download and verify the latest package, show its `Depends` and maintainer scripts and diff them against the last version seen. Installs nothing |
-| `./claude-desktop-userland.sh --allow-downgrade` | Modifier for install, `--force`, `--check`, `--inspect`: accept a repository version older than the installed one, with a warning. Never bypasses the signature or `Valid-Until` |
-| `./claude-desktop-userland.sh --doctor` | Check this host can run the app: glibc, sandbox, shared libraries, keyring, portals. Offline, changes nothing, exits non-zero on a blocking problem |
-| `./claude-desktop-userland.sh --print-apparmor-profile` | Print an AppArmor profile for hosts that restrict user namespaces (Ubuntu 24.04+), with install instructions |
-| `./claude-desktop-userland.sh --uninstall` | Remove the app, keep `~/.config/Claude` |
-| `./claude-desktop-userland.sh --purge` | Remove the app and its configuration |
-| `./claude-desktop-userland.sh --help` | Usage text |
+Output of `./claude-desktop-userland.sh --help`, verbatim:
+
+<!-- usage:begin -->
+```
+claude-desktop-userland.sh 1.1.0
+
+Installs the official Claude Desktop .deb into $HOME on an rpm-ostree /
+bootc system, without dpkg, without layering, without root.
+
+  (no option)   install, or upgrade to the latest published version
+  --check       report installed vs. available version, change nothing
+  --inspect     download latest, show package relations and maintainer
+                scripts, diff against the last seen version; no install
+  --force       reinstall even if already up to date
+  --allow-downgrade
+                modifier: accept a repository version older than the one
+                installed, and an index Date older than the last one
+                verified (with a warning). Never bypasses the signature or
+                Valid-Until checks
+  --skip-host-check
+                modifier for install and --force: continue when glibc is
+                older than 2.34 (the version floor only). It does NOT
+                cover a host without glibc (musl is still refused), does not
+                silence the NixOS warning, does not skip the post-install
+                checks, and touches no signature, freshness or downgrade
+                check
+  --doctor      check this host can run the app (glibc, sandbox, shared
+                libraries, keyring, portals); offline, changes nothing
+  --print-apparmor-profile
+                print an AppArmor profile for Ubuntu 24.04+ hosts that
+                restrict user namespaces, with install instructions
+  --uninstall   remove the application, keep ~/.config/Claude
+  --purge       remove the application and its configuration/data
+  --help        this text
+  --version     print the script version
+```
+<!-- usage:end -->
 
 The script is idempotent. Running it on a schedule (a user systemd timer, for
 example) is a reasonable update strategy, since the app's own updater cannot
@@ -153,6 +194,55 @@ translated into an install command for apt, dnf, pacman or zypper; on apt
 systems the package name (for example `libasound2t64` versus `libasound2`) is
 the one `apt-cache` knows. Without binutils the library check is skipped with
 a warning.
+
+---
+
+## User namespaces and the Chromium sandbox
+
+`chrome-sandbox` is never made setuid here (that needs root), so the renderer
+sandbox depends on unprivileged user namespaces. Most distributions allow them.
+**Ubuntu 24.04 and later restrict them through AppArmor**
+(`kernel.apparmor_restrict_unprivileged_userns=1`): an unconfined program can
+no longer create one, and the sandbox fails to start. `--doctor` and the
+launcher detect this. The official package lifts the restriction with a
+profile for `/usr/lib/claude-desktop/...`, which does not cover an install
+under `$HOME`.
+
+The options, in order:
+
+1. **Load a userns profile for this install (preferred with this installer).**
+   `--print-apparmor-profile` prints one in the form Ubuntu uses for browsers
+   (`abi <abi/4.0>`, `flags=(unconfined)`, `userns,`), attached to your install
+   path, plus the root commands to load and remove it.
+   **Trade-off:** that path is inside `$HOME` and writable by you. Any code
+   running with your privileges can place a binary there and will be allowed
+   to create user namespaces, which weakens the restriction for your account.
+2. **Use the official `.deb` through APT instead of this installer** (outside
+   its scope; needs root and a mutable system). Its profile attaches to a
+   root-owned path, so it does not have the weakness of option 1.
+3. **Last resort: `CLAUDE_NO_SANDBOX=1`.** Disables the Chromium sandbox
+   entirely; web content is then no longer isolated from your session.
+
+Details: [docs/LIMITATIONS.md](docs/LIMITATIONS.md#apparmor-on-ubuntu-2404).
+
+---
+
+## Compatibility
+
+| System | Status |
+| --- | --- |
+| Bluefin LTS (`bluefin-lts-nvidia`, CentOS Stream 10 base), GNOME on Wayland | **Tested**: installed, upgraded and used daily by the author |
+| Fedora Silverblue / Kinoite, other uBlue images | Untested |
+| Fedora Workstation | Untested |
+| Ubuntu 24.04+ (AppArmor userns restriction) | Untested |
+| Ubuntu 22.04 | Untested |
+| Debian 12 / 13 | Untested |
+| Arch Linux | Untested |
+| openSUSE Tumbleweed | Untested |
+| glibc older than 2.34 (Debian 11, RHEL/Alma/Rocky 8), musl (Alpine, Void-musl) | Not supported: refused by design (see Requirements) |
+
+"Untested" stays until the CI matrix in [ROADMAP.md](ROADMAP.md) runs on that
+system.
 
 ---
 
@@ -235,6 +325,18 @@ then this method, and layering last.
 - The payload is installed to a staging path and moved into place, so an
   interrupted extraction cannot leave a half-written version directory that the
   `current` symlink points at.
+- **`Valid-Until` is enforced.** An expired repository index is refused, and
+  so is one whose `Date` is more than 10 minutes in the future. Both fields
+  are read only from the content gpg verified; `InRelease` must be a single
+  clear-signed block with nothing outside it.
+- **An index older than the last one verified is refused.** After a fully
+  verified download the index `Date` is stored in
+  `~/.local/share/claude-desktop/state/`; a later index with an older `Date`
+  is rejected as a possible rollback. The stored value never decreases.
+- **Downgrades are refused.** If the newest version in the signed index is
+  older than the installed one, the install stops.
+- `--allow-downgrade` overrides the last two, with a warning. Nothing
+  overrides the signature or `Valid-Until`.
 - If you find a flaw in the verification chain, open an issue rather than a
   pull request first.
 

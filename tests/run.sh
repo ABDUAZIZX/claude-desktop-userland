@@ -428,8 +428,28 @@ t_skip_record() {
   fi
 }
 
+# --- README stays in sync with the script ------------------------------------
+t_readme() {
+  local readme="$HERE/../README.md" block want got
+  block="$(sed -n '/<!-- usage:begin -->/,/<!-- usage:end -->/p' "$readme" | sed '1,2d;$d' | sed '$d')"
+  want="$(usage)"
+  if [ "$block" = "$want" ]; then ok "README Usage block matches --help verbatim"
+  else nok "README Usage block matches --help verbatim" "$(diff <(printf '%s\n' "$want") <(printf '%s\n' "$block") | head -n 20)"; fi
+
+  want="$(sha256sum "$SCRIPT" | cut -d' ' -f1)"
+  got="$(sed -n 's/^echo "\([0-9a-f]\{64\}\)  claude-desktop-userland.sh" | sha256sum -c -$/\1/p' "$readme")"
+  if [ "$got" = "$want" ]; then ok "README install hash matches the script"
+  else nok "README install hash matches the script" "README=$got script=$want (update the install snippet)"; fi
+
+  if grep -q "raw.githubusercontent.com/ABDUAZIZX/claude-desktop-userland/v$SELF_VERSION/claude-desktop-userland.sh" "$readme"; then
+    ok "README install URL points at tag v$SELF_VERSION"
+  else
+    nok "README install URL points at tag v$SELF_VERSION"
+  fi
+}
+
 # Test groups register themselves here.
-TESTS=(t_sourcing t_apparmor t_libs t_extract t_release_dates t_downgrade t_date_floor t_skip_record)
+TESTS=(t_sourcing t_apparmor t_libs t_extract t_release_dates t_downgrade t_date_floor t_skip_record t_readme)
 
 for t in "${TESTS[@]}"; do "$t"; done
 
