@@ -27,6 +27,17 @@ export HOME="$WORK/home"
 unset XDG_DATA_HOME
 mkdir -p "$HOME"
 
+# Preflight requires curl and gpg to exist, but the tests that reach it never
+# download or verify anything. Stubs make those tests independent of the host
+# (a bare Ubuntu image has neither); a stub that is actually called fails loudly.
+STUBS="$WORK/stubs"
+mkdir -p "$STUBS"
+for _t in curl gpg; do
+  printf '#!/bin/sh\necho "test stub %s was called; tests must not reach the network" >&2\nexit 97\n' "$_t" >"$STUBS/$_t"
+  chmod +x "$STUBS/$_t"
+done
+unset _t
+
 # shellcheck source=../claude-desktop-userland.sh
 . "$SCRIPT"
 
@@ -65,7 +76,7 @@ t_sourcing() {
   # an "[ -L ] && ..." as the function's last statement used to return 1 and
   # end the script silently under set -e
   expect_rc 0 "preflight succeeds with nothing installed" \
-    bash -c 'set -euo pipefail; . "$1"; MODE=check; CURRENT="$2/none"; step_preflight; echo "INSTALLED=[$INSTALLED_VER]"' _ "$SCRIPT" "$WORK"
+    env PATH="$STUBS:$PATH" bash -c 'set -euo pipefail; . "$1"; MODE=check; CURRENT="$2/none"; step_preflight; echo "INSTALLED=[$INSTALLED_VER]"' _ "$SCRIPT" "$WORK"
   expect_rc 0 "parse_args accepts --doctor" parse_args --doctor
   expect_rc 1 "parse_args rejects an unknown option" parse_args --bogus
 }
@@ -366,7 +377,7 @@ t_downgrade() {
   expect_out 'HOST_FAIL=1' "musl still refused with --skip-host-check" \
     env PATH="$fk/musl:$PATH" bash -c '. "$1"; check_libc skip-floor; echo "HOST_FAIL=$HOST_FAIL"' _ "$SCRIPT"
   expect_out 'does not cover a missing glibc' "preflight on musl with the flag dies with the scope message" \
-    env PATH="$fk/musl:$PATH" bash -c 'set -euo pipefail; . "$1"; parse_args --skip-host-check; CURRENT="$2/none"; step_preflight' _ "$SCRIPT" "$WORK"
+    env PATH="$fk/musl:$STUBS:$PATH" bash -c 'set -euo pipefail; . "$1"; parse_args --skip-host-check; CURRENT="$2/none"; step_preflight' _ "$SCRIPT" "$WORK"
 
   # the old environment variable must have no effect any more
   expect_out 'SKIP=0' "CLAUDE_SKIP_HOST_CHECK env var ignored" \
@@ -377,7 +388,7 @@ t_downgrade() {
     env -u CLAUDE_SKIP_HOST_CHECK bash -c '. "$1"; warn_legacy_env' _ "$SCRIPT"
   # end to end through main: warning shown, behaviour unchanged (still refused on old glibc)
   local e2e
-  e2e="$(env CLAUDE_SKIP_HOST_CHECK=1 PATH="$fk/old:$PATH" HOME="$WORK/legacy-home" bash "$SCRIPT" 2>&1)"
+  e2e="$(env CLAUDE_SKIP_HOST_CHECK=1 PATH="$fk/old:$STUBS:$PATH" HOME="$WORK/legacy-home" bash "$SCRIPT" 2>&1)"
   if grep -q 'no longer has any effect' <<<"$e2e" && grep -q 'glibc too old' <<<"$e2e"; then
     ok "main warns about the legacy var and still refuses old glibc"
   else
