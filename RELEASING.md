@@ -4,10 +4,20 @@ The order matters: the README install snippet pins both a tag and the
 script's SHA256, and the SHA256 covers the version string inside the script.
 `X.Y.Z` below is the new version.
 
-## 1. Bump the version
+## Between releases
+
+Record changes under a `## Unreleased` heading at the top of `CHANGELOG.md`
+and leave `SELF_VERSION` at the last released version. The tests require a
+dated CHANGELOG heading for `SELF_VERSION`, so bumping the version early
+would fail CI until release day.
+
+## 1. Bump the version and date the entry
+
+Both in the same commit:
 
 - `SELF_VERSION="X.Y.Z"` in `claude-desktop-userland.sh`.
-- In `CHANGELOG.md`, turn `## X.Y.Z (unreleased)` into `## X.Y.Z (YYYY-MM-DD)`.
+- In `CHANGELOG.md`, turn `## Unreleased` into `## X.Y.Z (YYYY-MM-DD)`, with
+  the release date.
 
 Make no further change to the script after this step. Any edit changes the
 hash computed next.
@@ -39,8 +49,10 @@ bash tests/run.sh
 ```
 
 All must pass. `tests/run.sh` fails if the README usage block differs from
-`--help`, if the README hash differs from the script, or if the README URL
-does not point at `v$SELF_VERSION`, so steps 1 to 3 are checked here.
+`--help`, if the README hash differs from the script, if the README URL does
+not point at `v$SELF_VERSION`, or if `CHANGELOG.md` has no
+`## $SELF_VERSION (YYYY-MM-DD)` heading with a real date, so steps 1 to 3 are
+checked here.
 
 The summary reads `N passed, M skipped, K failed`. A skip means a code path
 was not exercised on this machine (for example no `bsdtar`); it is not a pass.
@@ -58,6 +70,11 @@ sha256sum claude-desktop-userland.sh     # must equal the README value
 ```
 
 ## 6. Signed tag
+
+**Precondition:** on the merge commit, `bash tests/run.sh` passes, including
+the dated CHANGELOG heading for `SELF_VERSION`. Do not tag a commit whose
+CHANGELOG still says `Unreleased` for this version; a tag cannot be fixed
+afterwards without moving it.
 
 Tag the merge commit on `main`, signed, and verify the signature before
 pushing:

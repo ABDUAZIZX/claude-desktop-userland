@@ -617,8 +617,37 @@ t_date_floor_modes() {
   unset FX
 }
 
+# --- CHANGELOG has a dated entry for the script's version ---------------------
+# changelog_dated_heading FILE VERSION -- prints the date if "## VERSION (YYYY-MM-DD)"
+# exists with a real calendar date
+changelog_dated_heading() {
+  local d
+  d="$(sed -n "s/^## ${2//./\\.} (\([0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}\))$/\1/p" "$1" | head -n1)"
+  [ -n "$d" ] || return 1
+  [ "$(date -u -d "$d" +%F 2>/dev/null)" = "$d" ] || return 1
+  echo "$d"
+}
+
+t_changelog() {
+  local cl="$HERE/../CHANGELOG.md" d f="$WORK/cl"
+  if d="$(changelog_dated_heading "$cl" "$SELF_VERSION")"; then
+    ok "CHANGELOG has a dated heading for $SELF_VERSION ($d)"
+  else
+    nok "CHANGELOG has a dated heading for $SELF_VERSION" \
+      "expected a line '## $SELF_VERSION (YYYY-MM-DD)'; see RELEASING.md step 1"
+  fi
+  # the check itself
+  mkdir -p "$f"
+  printf '## 9.9.9 (unreleased)\n' >"$f/a";   expect_rc 1 "'(unreleased)' is not a dated heading" changelog_dated_heading "$f/a" 9.9.9
+  printf '## 9.9.9 (2026-02-30)\n' >"$f/b";   expect_rc 1 "impossible date rejected"            changelog_dated_heading "$f/b" 9.9.9
+  printf '## 9.9.90 (2026-01-01)\n' >"$f/c";  expect_rc 1 "another version does not count"      changelog_dated_heading "$f/c" 9.9.9
+  printf '## 9x9x9 (2026-01-01)\n' >"$f/d";   expect_rc 1 "dots in the version are literal"     changelog_dated_heading "$f/d" 9.9.9
+  printf '## Unreleased\n\n## 9.9.9 (2026-01-01)\n' >"$f/e"
+  expect_rc 0 "dated heading found below an Unreleased section" changelog_dated_heading "$f/e" 9.9.9
+}
+
 # Test groups register themselves here.
-TESTS=(t_sourcing t_apparmor t_libs t_extract t_release_dates t_downgrade t_date_floor t_skip_record t_readme t_version_format t_date_floor_modes)
+TESTS=(t_sourcing t_apparmor t_libs t_extract t_release_dates t_downgrade t_date_floor t_skip_record t_readme t_version_format t_date_floor_modes t_changelog)
 
 for t in "${TESTS[@]}"; do "$t"; done
 
