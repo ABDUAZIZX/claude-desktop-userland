@@ -12,14 +12,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install shellcheck
-        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Install tools
+        # libarchive-tools provides bsdtar, so the bsdtar extraction path is
+        # tested too; --no-skip below fails the job if any test is skipped
+        run: sudo apt-get update && sudo apt-get install -y shellcheck libarchive-tools
 
       - name: Syntax check
         run: bash -n claude-desktop-userland.sh
 
       - name: Lint
-        run: shellcheck -S warning -s bash claude-desktop-userland.sh
+        run: |
+          shellcheck -S warning -s bash claude-desktop-userland.sh
+          shellcheck -S warning -x tests/run.sh
+
+      - name: Unit tests
+        run: bash tests/run.sh --no-skip
 
       - name: Help output must work
         run: ./claude-desktop-userland.sh --help

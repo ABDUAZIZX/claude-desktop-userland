@@ -74,11 +74,24 @@ lines after the signed block and a naive parser would read them.
 distribution, plus the freshness fields (`Date`, `Valid-Until`) that APT would
 normally use for replay protection.
 
-**Note:** the script does not currently enforce `Valid-Until`. A network
-attacker able to serve a stale but genuinely signed `InRelease` could pin you to
-an older release. Given that the script also refuses to downgrade an existing
-install only by version comparison, treat this as a known gap rather than a
-solved problem. Enforcing it is a small awk addition if you want it.
+**Freshness (enforced).** Before the signature is checked, `InRelease` must
+be exactly one clear-signed block with nothing before or after it. After
+verification, `Date` and `Valid-Until` are read from `Release.verified` only:
+
+- `Valid-Until` in the past: refused. A stale but genuinely signed index
+  could otherwise pin you to an older release (replay).
+- `Date` more than 10 minutes ahead of the local clock: refused.
+- Either field missing or unparseable: refused.
+- `Date` older than the newest `Date` already verified on this machine:
+  refused. The floor lives in `~/.local/share/claude-desktop/state/last-release-date`
+  and is raised as soon as `InRelease` (signature, freshness, floor) and the
+  `Packages` index it pins (Link 4) have verified, in every mode that fetches
+  the index: install, `--force`, `--check`, `--inspect`, and runs that end
+  with "already up to date". The `.deb` is not needed for it: the `Date` is a
+  property of the signed index, not of the package. It never moves backwards,
+  and an index that fails any of these checks never touches it.
+  `--allow-downgrade` accepts an older `Date` with a warning; it does not
+  touch the signature or `Valid-Until` checks.
 
 ## Link 4: Packages index
 
@@ -133,8 +146,10 @@ Being explicit about the residual trust:
   are running Anthropic's Electron app with your user's privileges and your
   user's file access.
 - **TLS and the CA set** for the initial key fetch, before pinning can help.
-- **The local toolchain**: `gpg`, `curl`, `sha256sum`, `python3`, `tar` from
-  the base image.
+- **The local toolchain**: `gpg`, `curl`, `sha256sum`, and whichever unpacker
+  is used (`bsdtar`, or `ar`/`python3` with `tar` and `xz`/`zstd`/`gzip`) from
+  the base image. Archive member names are checked against
+  `(control|data).tar[.xz|.gz|.zst]` before anything is extracted.
 - **`$TMPDIR`.** On a shared machine with a world-writable `/tmp` and no
   `mktemp` privacy, a local attacker could in principle race the extracted
   payload. `mktemp -d` creates mode 0700 directories, which closes the ordinary
