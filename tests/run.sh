@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# Unit tests for claude-desktop-userland.sh.
+#
+# The script is sourced (its main() guard keeps it from running) and its
+# functions are called directly. Every call that may exit runs in a subshell
+# so a die() fails one assertion instead of the whole suite.
+#
+# Usage: bash tests/run.sh            (no network, no root, touches only $TMPDIR)
+
+set -uo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT="$HERE/../claude-desktop-userland.sh"
+WORK="$(mktemp -d -t cdu-tests.XXXXXXXX)"
+trap 'rm -rf "$WORK"' EXIT
+
+# Isolate every path the script derives from HOME before sourcing it.
+export HOME="$WORK/home"
+unset XDG_DATA_HOME
+mkdir -p "$HOME"
+
+# shellcheck source=../claude-desktop-userland.sh
+. "$SCRIPT"
+
+PASS=0
+FAIL=0
+ok()   { PASS=$((PASS + 1)); printf 'ok   %s\n' "$1"; }
+nok()  { FAIL=$((FAIL + 1)); printf 'FAIL %s\n' "$1"; [ -n "${2:-}" ] && printf '     %s\n' "$2"; }
+
+# expect_rc <expected-rc> <name> <command...>  -- runs the command in a subshell
+expect_rc() {
+  local want="$1" name="$2" got out
+  shift 2
+  out="$( ( "$@" ) 2>&1 )"; got=$?
+  if [ "$got" = "$want" ]; then ok "$name"; else nok "$name" "rc=$got want=$want: $out"; fi
+}
+
+# expect_out <pattern> <name> <command...>  -- combined output must match (grep -E)
+expect_out() {
+  local pat="$1" name="$2" out
+  shift 2
+  out="$( ( "$@" ) 2>&1 )"
+  if grep -qE -- "$pat" <<<"$out"; then ok "$name"; else nok "$name" "no match for /$pat/ in: $out"; fi
+}
+
+# --- sourcing ----------------------------------------------------------------
+t_sourcing() {
+  if declare -F main >/dev/null && [ -z "${MODE:-}" ]; then
+    ok "sourcing defines main() without running it"
+  else
+    nok "sourcing defines main() without running it"
+  fi
+  # regression: on a fresh install (no "current" link) preflight must succeed;
+  # an "[ -L ] && ..." as the function's last statement used to return 1 and
+  # end the script silently under set -e
+  expect_rc 0 "preflight succeeds with nothing installed" \
+    bash -c 'set -euo pipefail; . "$1"; MODE=check; CURRENT="$2/none"; step_preflight; echo "INSTALLED=[$INSTALLED_VER]"' _ "$SCRIPT" "$WORK"
+  expect_rc 0 "parse_args accepts --doctor" parse_args --doctor
+  expect_rc 1 "parse_args rejects an unknown option" parse_args --bogus
+}
+
+# Test groups register themselves here.
+TESTS=(t_sourcing)
+
+for t in "${TESTS[@]}"; do "$t"; done
+
+printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
+[ "$FAIL" = 0 ]

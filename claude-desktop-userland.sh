@@ -31,8 +31,8 @@
 #   ./claude-desktop-userland.sh --purge      remove app AND config/data
 # ---------------------------------------------------------------------------
 
-set -euo pipefail
-umask 022
+# Shell options are set in main(), so the file can be sourced by tests/ without
+# changing the caller's shell.
 
 # --- constants -------------------------------------------------------------
 KEY_URL="https://downloads.claude.ai/claude-desktop/key.asc"
@@ -407,23 +407,35 @@ bootc system, without dpkg, without layering, without root.
 USAGE
 }
 
-MODE="install"
-case "${1:-}" in
-  --uninstall)     do_uninstall no ;;
-  --purge)         do_uninstall purge ;;
-  --check)         MODE="check" ;;
-  --inspect)       MODE="inspect" ;;
-  --force)         MODE="force" ;;
-  --doctor)        run_host_checks
-                   [ "$HOST_FAIL" = 0 ] && { c_ok "host looks able to run Claude Desktop"; exit 0; }
-                   c_err "blocking problems found (see [fail] lines above)"; exit 1 ;;
-  --print-apparmor-profile) print_apparmor_profile; exit 0 ;;
-  -h|--help)       usage; exit 0 ;;
-  -V|--version)    printf '%s\n' "$SELF_VERSION"; exit 0 ;;
-  "")              : ;;
-  *)               usage >&2; die "unknown option: $1" ;;
-esac
+# --- argument parsing ------------------------------------------------------
+parse_args() {
+  MODE="install"
+  case "${1:-}" in
+    --uninstall)     MODE="uninstall" ;;
+    --purge)         MODE="purge" ;;
+    --check)         MODE="check" ;;
+    --inspect)       MODE="inspect" ;;
+    --force)         MODE="force" ;;
+    --doctor)        MODE="doctor" ;;
+    --print-apparmor-profile) MODE="apparmor" ;;
+    -h|--help)       MODE="help" ;;
+    -V|--version)    MODE="version" ;;
+    "")              : ;;
+    *)               usage >&2; die "unknown option: $1" ;;
+  esac
+}
 
+run_doctor() {
+  run_host_checks
+  if [ "$HOST_FAIL" = 0 ]; then
+    c_ok "host looks able to run Claude Desktop"
+    return 0
+  fi
+  c_err "blocking problems found (see [fail] lines above)"
+  return 1
+}
+
+step_preflight() {
 # --- preflight -------------------------------------------------------------
 for t in curl gpg sha256sum awk tar python3 find sed diff; do need "$t"; done
 
@@ -442,12 +454,13 @@ case "$ARCH" in
 esac
 
 INSTALLED_VER=""
-[ -L "$CURRENT" ] && INSTALLED_VER="$(basename "$(readlink -f "$CURRENT")")"
+if [ -L "$CURRENT" ]; then
+  INSTALLED_VER="$(basename "$(readlink -f "$CURRENT")")"
+fi
 
-TMP="$(mktemp -d -t claude-desktop.XXXXXXXX)"
-trap 'rm -rf "$TMP"' EXIT
-cd "$TMP"
+}
 
+step_fetch_verified_index() {
 # --- 1. signing key + fingerprint check ------------------------------------
 c_info "fetching Anthropic signing key"
 curl -fsSLo key.asc "$KEY_URL" || die "could not download signing key"
@@ -488,7 +501,9 @@ EOF
 curl -fsSLo Packages "$REPO_BASE/dists/stable/$IDX_PATH" || die "could not download Packages"
 echo "$IDX_SHA  Packages" | sha256sum -c --quiet - || die "Packages checksum mismatch"
 c_ok "package index verified"
+}
 
+step_select_package() {
 # --- 4. pick newest package ------------------------------------------------
 read -r VER FILENAME DEB_SHA <<EOF
 $(awk -v RS='' -v pkg="$PKG_NAME" '
@@ -508,60 +523,15 @@ EOF
 
 c_info "installed: ${INSTALLED_VER:-none}   available: $VER"
 
-if [ "$MODE" = "check" ]; then
-  [ "$INSTALLED_VER" = "$VER" ] && c_ok "up to date" || c_warn "update available"
-  exit 0
-fi
-if [ "$INSTALLED_VER" = "$VER" ] && [ "$MODE" = "install" ]; then
-  c_ok "already up to date, nothing to do (use --force to reinstall)"
-  exit 0
-fi
+}
 
+step_download_package() {
 # --- 5. download + verify the .deb -----------------------------------------
 c_info "downloading $VER (~160 MB)"
 curl -fL --progress-bar -o pkg.deb "$REPO_BASE/$FILENAME" || die "download failed"
 echo "$DEB_SHA  pkg.deb" | sha256sum -c --quiet - || die "package checksum mismatch"
 c_ok "package checksum verified"
-
-# --- 6. extract .deb without dpkg ------------------------------------------
-c_info "extracting"
-TARS="$(python3 - "$TMP/pkg.deb" "$TMP" <<'PY'
-import sys, os, re
-deb, outdir = sys.argv[1], sys.argv[2]
-data_path = control_path = None
-with open(deb, 'rb') as f:
-    if f.read(8) != b'!<arch>\n':
-        sys.exit("not a valid .deb (ar) archive")
-    while True:
-        hdr = f.read(60)
-        if len(hdr) < 60:
-            break
-        name = hdr[0:16].decode('ascii', 'replace').strip().rstrip('/')
-        size = int(hdr[48:58].decode('ascii').strip())
-        start = f.tell()
-        if re.fullmatch(r'(data|control)\.tar(\.[a-z0-9]+)?', name):
-            out = os.path.join(outdir, name)
-            with open(out, 'wb') as o:
-                left = size
-                while left:
-                    chunk = f.read(min(1 << 20, left))
-                    if not chunk:
-                        sys.exit("truncated archive")
-                    o.write(chunk); left -= len(chunk)
-            if name.startswith('data'):
-                data_path = out
-            else:
-                control_path = out
-        f.seek(start + size + (size % 2))
-if not data_path or not control_path:
-    sys.exit("data.tar or control.tar member not found in .deb")
-print(data_path)
-print(control_path)
-PY
-)" || die "could not unpack the .deb container"
-
-DATA_TAR="${TARS%%$'\n'*}"
-CONTROL_TAR="${TARS##*$'\n'}"
+}
 
 untar() {
   case "$1" in
@@ -613,16 +583,59 @@ report_package_meta() {
   fi
 }
 
+step_extract_package() {
+# --- 6. extract .deb without dpkg ------------------------------------------
+c_info "extracting"
+TARS="$(python3 - "$TMP/pkg.deb" "$TMP" <<'PY'
+import sys, os, re
+deb, outdir = sys.argv[1], sys.argv[2]
+data_path = control_path = None
+with open(deb, 'rb') as f:
+    if f.read(8) != b'!<arch>\n':
+        sys.exit("not a valid .deb (ar) archive")
+    while True:
+        hdr = f.read(60)
+        if len(hdr) < 60:
+            break
+        name = hdr[0:16].decode('ascii', 'replace').strip().rstrip('/')
+        size = int(hdr[48:58].decode('ascii').strip())
+        start = f.tell()
+        if re.fullmatch(r'(data|control)\.tar(\.[a-z0-9]+)?', name):
+            out = os.path.join(outdir, name)
+            with open(out, 'wb') as o:
+                left = size
+                while left:
+                    chunk = f.read(min(1 << 20, left))
+                    if not chunk:
+                        sys.exit("truncated archive")
+                    o.write(chunk); left -= len(chunk)
+            if name.startswith('data'):
+                data_path = out
+            else:
+                control_path = out
+        f.seek(start + size + (size % 2))
+if not data_path or not control_path:
+    sys.exit("data.tar or control.tar member not found in .deb")
+print(data_path)
+print(control_path)
+PY
+)" || die "could not unpack the .deb container"
+
+DATA_TAR="${TARS%%$'\n'*}"
+CONTROL_TAR="${TARS##*$'\n'}"
+
 CTRL="$TMP/control"; mkdir -p "$CTRL"
 untar "$CONTROL_TAR" "$CTRL"
 [ -f "$CTRL/control" ] || die "control file missing from package"
 report_package_meta "$CTRL"
-[ "$MODE" = "inspect" ] && exit 0
+[ "$MODE" = "inspect" ] && return 0
 
 ROOT="$TMP/root"; mkdir -p "$ROOT"
 untar "$DATA_TAR" "$ROOT"
 c_ok "payload extracted"
+}
 
+step_locate_app() {
 # --- 7. locate the Electron app root ---------------------------------------
 ASAR="$(find "$ROOT" -type f -name 'app.asar' -path '*/resources/*' 2>/dev/null | head -n1 || true)"
 if [ -n "$ASAR" ]; then
@@ -644,7 +657,9 @@ fi
 [ -n "$APPBIN" ] || die "could not identify the main executable inside $APPDIR"
 BINNAME="$(basename "$APPBIN")"
 c_ok "app root: ${APPDIR#"$ROOT"}  (binary: $BINNAME)"
+}
 
+step_install_payload() {
 # --- 8. install into ~/.local ----------------------------------------------
 mkdir -p "$VERSIONS" "$(dirname "$BIN")" "$(dirname "$DESKTOP_FILE")" "$ICON_ROOT"
 TARGET="$VERSIONS/$VER"
@@ -666,7 +681,9 @@ for d in "$META_DIR"/*/; do
   v="$(basename "$d")"
   [ -d "$VERSIONS/$v" ] || rm -rf "${META_DIR:?}/$v"
 done
+}
 
+step_write_launcher() {
 # --- 9. launcher wrapper ---------------------------------------------------
 cat > "$BIN" <<WRAP
 #!/usr/bin/env bash
@@ -706,7 +723,9 @@ exec "\$APP" "\${ARGS[@]}" "\$@"
 WRAP
 chmod +x "$BIN"
 c_ok "launcher: $BIN"
+}
 
+step_write_desktop_entry() {
 # --- 10. desktop entry + icons ---------------------------------------------
 SRC_DESKTOP="$(find "$ROOT/usr/share/applications" -maxdepth 1 -name '*.desktop' 2>/dev/null | head -n1 || true)"
 if [ -n "$SRC_DESKTOP" ]; then
@@ -744,7 +763,9 @@ command -v update-desktop-database >/dev/null 2>&1 && \
 command -v gtk-update-icon-cache >/dev/null 2>&1 && \
   gtk-update-icon-cache -qtf "$ICON_ROOT" 2>/dev/null || true
 c_ok "desktop entry and icons registered"
+}
 
+step_final_report() {
 # --- 11. environment report ------------------------------------------------
 echo
 c_info "host check"
@@ -753,7 +774,53 @@ echo
 if [ "$HOST_FAIL" != 0 ]; then
   c_warn "Claude Desktop $VER installed, but the problems marked [fail] above will stop it from running"
   c_info "re-run with --doctor after fixing them"
-  exit 1
+  return 1
 fi
 c_ok "Claude Desktop $VER installed. Launch it from your app menu, or run: claude-desktop"
 c_info "To update later, just run this script again (it is idempotent)."
+}
+
+# --- main ------------------------------------------------------------------
+main() {
+  set -euo pipefail
+  umask 022
+  parse_args "$@"
+  case "$MODE" in
+    uninstall) do_uninstall no ;;
+    purge)     do_uninstall purge ;;
+    doctor)    run_doctor; return ;;
+    apparmor)  print_apparmor_profile; return 0 ;;
+    help)      usage; return 0 ;;
+    version)   printf '%s\n' "$SELF_VERSION"; return 0 ;;
+  esac
+
+  step_preflight
+  TMP="$(mktemp -d -t claude-desktop.XXXXXXXX)"
+  trap 'rm -rf "$TMP"' EXIT
+  cd "$TMP"
+
+  step_fetch_verified_index
+  step_select_package
+  if [ "$MODE" = "check" ]; then
+    if [ "$INSTALLED_VER" = "$VER" ]; then c_ok "up to date"; else c_warn "update available"; fi
+    return 0
+  fi
+  if [ "$INSTALLED_VER" = "$VER" ] && [ "$MODE" = "install" ]; then
+    c_ok "already up to date, nothing to do (use --force to reinstall)"
+    return 0
+  fi
+
+  step_download_package
+  step_extract_package
+  [ "$MODE" = "inspect" ] && return 0
+  step_locate_app
+  step_install_payload
+  step_write_launcher
+  step_write_desktop_entry
+  step_final_report
+}
+
+# Run only when executed (directly, via bash, or piped); not when sourced.
+if [ "${BASH_SOURCE[0]:-$0}" = "$0" ]; then
+  main "$@"
+fi
