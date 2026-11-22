@@ -136,9 +136,14 @@ and input method behaviour that are otherwise broken under XWayland.
 - The Electron runtime libraries (GTK3, NSS, ATK/AT-SPI, Mesa GBM, X11 client
   libraries, ALSA). Desktop images ship them; minimal ones do not
 
-After every install the script runs the same checks as `--doctor`. Missing
-shared libraries are found with `ldd` and translated into an install command
-for apt, dnf, pacman or zypper.
+After every install the script runs the same checks as `--doctor`. Shared
+libraries are checked without running or loading the payload: `NEEDED` entries
+are read with `readelf -d` (or `objdump -p`, both from binutils) and resolved
+through the app's own `RUNPATH`/`$ORIGIN`, then `ldconfig -p`. Missing ones are
+translated into an install command for apt, dnf, pacman or zypper; on apt
+systems the package name (for example `libasound2t64` versus `libasound2`) is
+the one `apt-cache` knows. Without binutils the library check is skipped with
+a warning.
 
 ---
 
@@ -147,9 +152,9 @@ for apt, dnf, pacman or zypper.
 Read [docs/LIMITATIONS.md](docs/LIMITATIONS.md) before relying on this. The
 short version:
 
-- **No dependency resolution.** `dpkg` is not involved. `--doctor` checks the
-  shared libraries with `ldd` and prints the packages to install, but it
-  installs nothing itself.
+- **No dependency resolution.** `dpkg` is not involved. `--doctor` reads the
+  ELF `NEEDED` entries (nothing is executed) and prints the packages to
+  install, but it installs nothing itself.
 - **Maintainer scripts are not executed.** `postinst` never runs. In practice
   this only costs the setuid bit on `chrome-sandbox`, which is deliberate:
   the launcher relies on unprivileged user namespaces instead.

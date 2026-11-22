@@ -10,11 +10,25 @@ a distrobox container instead.
 Silverblue or Kinoite base image the Electron dependency set (glibc, GTK3,
 `libnss3`, `libatk`, `libdrm`, Mesa, PipeWire/ALSA) is already present, so the
 practical failure rate is near zero. On a stripped-down image or inside a
-minimal container libraries will be missing. The installer runs `ldd` after
-every install, and `--doctor` repeats the check at any time, mapping each
-missing soname to a package name for apt, dnf, pacman or zypper. The mapping
-covers the libraries Electron needs and is a hint, not a resolver. A glibc
-older than 2.34, or no glibc at all, stops the install before the download.
+minimal container libraries will be missing. After every install, and on
+`--doctor`, the script reads the `NEEDED` entries of the binary and every
+bundled `*.so` with `readelf -d` (fallback `objdump -p`) and resolves them the
+way the loader would: `RUNPATH`/`RPATH` with `$ORIGIN` first, then the
+`ldconfig -p` cache filtered to the machine's ABI. Nothing from the payload is
+executed or loaded; `ldd` is deliberately not used, since it can run code from
+the file it inspects. Without binutils the check is skipped with a warning.
+
+Limits of this check: it covers direct dependencies only, not the
+dependencies of system libraries (the system's own package manager owns
+those), and it cannot see libraries the app opens later with `dlopen()`
+(`libnotify`, `libsecret`, PipeWire and others in `Depends:`). Missing
+sonames are mapped to package names for apt, dnf, pacman and zypper for
+Electron's direct `NEEDED` set only; on apt systems the name is the one
+`apt-cache` knows, which handles the `t64` renames of Ubuntu 24.04+ and
+Debian 13. Anything else is printed with the family's search command
+(`apt-file search`, `dnf provides`, `pacman -F`, `zypper se --provides`). A
+glibc older than 2.34, or no glibc at all, stops the install before the
+download.
 
 **Maintainer scripts never run.** `preinst`, `postinst`, `prerm` and `postrm`
 are not extracted and not executed. Consequences:

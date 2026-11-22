@@ -85,19 +85,6 @@ os_family() {
   esac
 }
 
-# Debian 13+ / Ubuntu 24.04+ renamed many library packages with a "t64"
-# suffix (64-bit time_t transition). Older releases still use the plain name.
-deb_uses_t64() {
-  local id="" ver=""
-  # shellcheck disable=SC1091
-  [ -r /etc/os-release ] && { id="$(. /etc/os-release; echo "${ID:-}")"; ver="$(. /etc/os-release; echo "${VERSION_ID:-}")"; }
-  case "$id" in
-    ubuntu) [ "$(printf '%s\n24.04\n' "${ver:-0}" | sort -V | head -n1)" = "24.04" ] ;;
-    debian) [ -z "$ver" ] || [ "${ver%%.*}" -ge 13 ] 2>/dev/null ;;   # empty VERSION_ID = testing/sid
-    *)      return 0 ;;                                                # derivatives: assume current
-  esac
-}
-
 # Name of the main executable inside an installed version directory.
 installed_binname() {
   local cand
@@ -237,80 +224,196 @@ check_userns() {
   c_ok "unprivileged user namespaces available -> Chromium sandbox OK"
 }
 
-# Map a missing soname to package names: "deb|rpm|arch|suse".
+# --- shared libraries ---------------------------------------------------------
+# The payload is never executed or loaded for this check: NEEDED entries are
+# read from the ELF dynamic section and resolved the way the loader would,
+# first through RUNPATH/RPATH ($ORIGIN = the file's own directory), then the
+# system cache from ldconfig -p.
+
+# Parse "readelf -d" output from stdin into "NEEDED x" / "RUNPATH y" lines.
+parse_readelf_dynamic() {
+  sed -nE 's/.*\((NEEDED|RUNPATH|RPATH)\)[^[]*\[(.*)\]$/\1 \2/p'
+}
+
+# Parse "objdump -p" output from stdin into the same form.
+parse_objdump_dynamic() {
+  awk '$1=="NEEDED" || $1=="RUNPATH" || $1=="RPATH" {print $1, $2}'
+}
+
+# elf_dynamic FILE -- prints NEEDED/RUNPATH/RPATH lines; returns 2 when neither
+# readelf nor objdump is available.
+elf_dynamic() {
+  if command -v readelf >/dev/null 2>&1; then
+    LC_ALL=C readelf -d -W "$1" 2>/dev/null | parse_readelf_dynamic
+  elif command -v objdump >/dev/null 2>&1; then
+    LC_ALL=C objdump -p "$1" 2>/dev/null | parse_objdump_dynamic
+  else
+    return 2
+  fi
+}
+
+# ldconfig is often outside an unprivileged PATH.
+find_ldconfig() {
+  local c
+  for c in "$(command -v ldconfig 2>/dev/null || true)" /sbin/ldconfig /usr/sbin/ldconfig; do
+    [ -n "$c" ] && [ -x "$c" ] && { echo "$c"; return 0; }
+  done
+  return 1
+}
+
+# ld_cache_sonames LDCONFIG MACHINE -- sonames in the cache for this machine.
+# Only entries tagged with the matching ABI count; a 32-bit copy of a library
+# does not satisfy a 64-bit binary.
+ld_cache_sonames() {
+  local tag
+  case "$2" in
+    x86_64)  tag="x86-64" ;;
+    aarch64) tag="AArch64" ;;
+    *)       tag="$2" ;;
+  esac
+  # The parenthesised field is a comma list, e.g. "(libc6,x86-64)" or, on
+  # glibc 2.35, "(libc6,x86-64, OS ABI: Linux 3.2.0)". Match one exact element.
+  "$1" -p 2>/dev/null | awk -v tag="$tag" '
+    match($0, /\([^)]*\)/) {
+      n = split(substr($0, RSTART + 1, RLENGTH - 2), f, ",")
+      for (i = 1; i <= n; i++) { gsub(/^ +| +$/, "", f[i]); if (f[i] == tag) { print $1; next } }
+    }' | sort -u
+}
+
+# resolve_soname SONAME ORIGIN-DIR RUNPATHS CACHE
+#   RUNPATHS: colon-separated, may contain $ORIGIN / ${ORIGIN}
+#   CACHE:    newline-separated sonames from ld_cache_sonames
+resolve_soname() {
+  local so="$1" origin="$2" runpaths="$3" cache="$4" dir
+  local IFS=':'
+  for dir in $runpaths; do
+    [ -n "$dir" ] || continue
+    dir="${dir//\$\{ORIGIN\}/$origin}"
+    dir="${dir//\$ORIGIN/$origin}"
+    [ -e "$dir/$so" ] && return 0
+  done
+  grep -qxF -- "$so" <<<"$cache"
+}
+
+# Electron's direct NEEDED set -> "deb|rpm|arch|suse". Debian-family entries may
+# list alternatives "new/old"; deb_pick_name chooses using apt-cache.
 lib_pkg() {
   case "$1" in
-    libgtk-3.so.*)                       echo "libgtk-3-0t64|gtk3|gtk3|libgtk-3-0" ;;
-    libgdk-3.so.*)                       echo "libgtk-3-0t64|gtk3|gtk3|libgtk-3-0" ;;
-    libnss3.so|libnssutil3.so|libsmime3.so) echo "libnss3|nss|nss|mozilla-nss" ;;
-    libnspr4.so|libplc4.so|libplds4.so)  echo "libnspr4|nspr|nspr|mozilla-nspr" ;;
-    libnotify.so.*)                      echo "libnotify4|libnotify|libnotify|libnotify4" ;;
-    libatspi.so.*)                       echo "libatspi2.0-0t64|at-spi2-core|at-spi2-core|libatspi0" ;;
-    libatk-1.0.so.*)                     echo "libatk1.0-0t64|at-spi2-core|at-spi2-core|libatk-1_0-0" ;;
-    libatk-bridge-2.0.so.*)              echo "libatk-bridge2.0-0t64|at-spi2-core|at-spi2-core|libatk-bridge-2_0-0" ;;
-    libdrm.so.*)                         echo "libdrm2|libdrm|libdrm|libdrm2" ;;
-    libgbm.so.*)                         echo "libgbm1|mesa-libgbm|mesa|libgbm1" ;;
-    libxcb-dri3.so.*)                    echo "libxcb-dri3-0|libxcb|libxcb|libxcb-dri3-0" ;;
-    libxkbcommon.so.*)                   echo "libxkbcommon0|libxkbcommon|libxkbcommon|libxkbcommon0" ;;
-    libsecret-1.so.*)                    echo "libsecret-1-0|libsecret|libsecret|libsecret-1-0" ;;
-    libXtst.so.*)                        echo "libxtst6|libXtst|libxtst|libXtst6" ;;
-    libXcomposite.so.*)                  echo "libxcomposite1|libXcomposite|libxcomposite|libXcomposite1" ;;
-    libXdamage.so.*)                     echo "libxdamage1|libXdamage|libxdamage|libXdamage1" ;;
-    libXrandr.so.*)                      echo "libxrandr2|libXrandr|libxrandr|libXrandr2" ;;
-    libXfixes.so.*)                      echo "libxfixes3|libXfixes|libxfixes|libXfixes3" ;;
-    libX11.so.*|libxcb.so.*)             echo "libx11-6|libX11|libx11|libX11-6" ;;
-    libXext.so.*)                        echo "libxext6|libXext|libxext|libXext6" ;;
-    libuuid.so.*)                        echo "libuuid1|libuuid|util-linux-libs|libuuid1" ;;
-    libasound.so.*)                      echo "libasound2t64|alsa-lib|alsa-lib|libasound2" ;;
-    libcups.so.*)                        echo "libcups2t64|cups-libs|libcups|libcups2" ;;
-    libpango-1.0.so.*)                   echo "libpango-1.0-0|pango|pango|libpango-1_0-0" ;;
-    libcairo.so.*)                       echo "libcairo2|cairo|cairo|libcairo2" ;;
-    libdbus-1.so.*)                      echo "libdbus-1-3|dbus-libs|dbus|libdbus-1-3" ;;
-    libglib-2.0.so.*|libgio-2.0.so.*|libgobject-2.0.so.*|libgmodule-2.0.so.*)
-                                         echo "libglib2.0-0t64|glib2|glib2|libglib-2_0-0" ;;
-    libexpat.so.*)                       echo "libexpat1|expat|expat|libexpat1" ;;
-    *)                                   echo "" ;;
+    libglib-2.0.so.0)       echo "libglib2.0-0t64/libglib2.0-0|glib2|glib2|libglib-2_0-0" ;;
+    libgobject-2.0.so.0)    echo "libglib2.0-0t64/libglib2.0-0|glib2|glib2|libgobject-2_0-0" ;;
+    libgio-2.0.so.0)        echo "libglib2.0-0t64/libglib2.0-0|glib2|glib2|libgio-2_0-0" ;;
+    libnspr4.so)            echo "libnspr4|nspr|nspr|mozilla-nspr" ;;
+    libnss3.so|libnssutil3.so|libsmime3.so)
+                            echo "libnss3|nss|nss|mozilla-nss" ;;
+    libatk-1.0.so.0)        echo "libatk1.0-0t64/libatk1.0-0|at-spi2-core|at-spi2-core|libatk-1_0-0" ;;
+    libatk-bridge-2.0.so.0) echo "libatk-bridge2.0-0t64/libatk-bridge2.0-0|at-spi2-core|at-spi2-core|libatk-bridge-2_0-0" ;;
+    libatspi.so.0)          echo "libatspi2.0-0t64/libatspi2.0-0|at-spi2-core|at-spi2-core|libatspi0" ;;
+    libcups.so.2)           echo "libcups2t64/libcups2|cups-libs|libcups|libcups2" ;;
+    libdbus-1.so.3)         echo "libdbus-1-3|dbus-libs|dbus|libdbus-1-3" ;;
+    libcairo.so.2)          echo "libcairo2|cairo|cairo|libcairo2" ;;
+    libgtk-3.so.0)          echo "libgtk-3-0t64/libgtk-3-0|gtk3|gtk3|libgtk-3-0" ;;
+    libpango-1.0.so.0)      echo "libpango-1.0-0|pango|pango|libpango-1_0-0" ;;
+    libX11.so.6)            echo "libx11-6|libX11|libx11|libX11-6" ;;
+    libxcb.so.1)            echo "libxcb1|libxcb|libxcb|libxcb1" ;;
+    libXcomposite.so.1)     echo "libxcomposite1|libXcomposite|libxcomposite|libXcomposite1" ;;
+    libXdamage.so.1)        echo "libxdamage1|libXdamage|libxdamage|libXdamage1" ;;
+    libXext.so.6)           echo "libxext6|libXext|libxext|libXext6" ;;
+    libXfixes.so.3)         echo "libxfixes3|libXfixes|libxfixes|libXfixes3" ;;
+    libXrandr.so.2)         echo "libxrandr2|libXrandr|libxrandr|libXrandr2" ;;
+    libgbm.so.1)            echo "libgbm1|mesa-libgbm|mesa|libgbm1" ;;
+    libexpat.so.1)          echo "libexpat1|expat|expat|libexpat1" ;;
+    libxkbcommon.so.0)      echo "libxkbcommon0|libxkbcommon|libxkbcommon|libxkbcommon0" ;;
+    libudev.so.1)           echo "libudev1|systemd-libs|systemd-libs|libudev1" ;;
+    libasound.so.2)         echo "libasound2t64/libasound2|alsa-lib|alsa-lib|libasound2" ;;
+    libgcc_s.so.1)          echo "libgcc-s1|libgcc|gcc-libs|libgcc_s1" ;;
+    *)                      return 1 ;;
   esac
 }
 
+# deb_pick_name "a/b/c" [apt-cache-command]
+# First alternative apt-cache knows (the t64 rename differs between Ubuntu
+# 24.04+/Debian 13 and older releases). Returns 1 with the last alternative
+# when none could be confirmed (no apt-cache, or empty package lists).
+deb_pick_name() {
+  local alts="$1" cache_cmd="${2:-apt-cache}" a last=""
+  local IFS='/'
+  for a in $alts; do
+    last="$a"
+    if command -v "$cache_cmd" >/dev/null 2>&1 \
+       && "$cache_cmd" show --no-all-versions "$a" >/dev/null 2>&1; then
+      echo "$a"; return 0
+    fi
+  done
+  echo "$last"
+  return 1
+}
+
+# Command that finds the package owning a soname, per family.
+lib_search_cmd() {
+  case "$2" in
+    deb)  echo "apt-file search $1" ;;
+    rpm)  echo "dnf provides '*/$1'" ;;
+    arch) echo "pacman -F $1" ;;
+    suse) echo "zypper se --provides --match-exact '$1()(64bit)'" ;;
+    *)    echo "search your distribution's package index for $1" ;;
+  esac
+}
+
+# check_libs [app-dir] [machine] -- defaults: the installed version, uname -m
 check_libs() {
-  local bin missing lib pkgs fam col list=""
-  if ! bin="$(installed_binname)"; then
+  local dir="${1:-$CURRENT}" machine="${2:-$(uname -m)}"
+  local bin f ldc cache dyn needed runpaths so missing="" fam col pkgs name list="" unconfirmed="" unmapped=""
+  if ! bin="$(CURRENT="$dir" installed_binname)"; then
     c_info "application not installed yet; shared-library check skipped"
     return 0
   fi
   if [ -z "$(getconf GNU_LIBC_VERSION 2>/dev/null || true)" ]; then
-    c_info "no glibc: shared-library check skipped (ldd output would be meaningless)"
+    c_info "no glibc: shared-library check skipped"
     return 0
   fi
-  if ! command -v ldd >/dev/null 2>&1; then
-    c_warn "ldd not available; shared-library check skipped"
+  if ! command -v readelf >/dev/null 2>&1 && ! command -v objdump >/dev/null 2>&1; then
+    c_warn "neither readelf nor objdump found; shared-library check skipped (install binutils)"
     return 0
   fi
-  # The payload was verified before installation, so running ldd on it (which
-  # invokes the dynamic loader) is not a trust problem here.
-  missing="$(find "$CURRENT/" -maxdepth 1 -type f \
-               \( -name "$bin" -o -name '*.so' -o -name '*.so.*' \) \
-               -exec ldd {} \; 2>/dev/null \
-             | awk '/=> not found/ {print $1}' | sort -u || true)"
-  if [ -z "$missing" ]; then
-    c_ok "all shared libraries resolve"
+  if ! ldc="$(find_ldconfig)"; then
+    c_warn "ldconfig not found (PATH, /sbin, /usr/sbin); shared-library check skipped"
     return 0
   fi
-  h_fail "missing shared libraries:"
+  cache="$(ld_cache_sonames "$ldc" "$machine")"
+
+  for f in "$dir/$bin" "$dir"/*.so "$dir"/*.so.*; do
+    [ -f "$f" ] || continue
+    dyn="$(elf_dynamic "$f")" || true
+    needed="$(awk '$1=="NEEDED" {print $2}' <<<"$dyn")"
+    runpaths="$(awk '$1=="RUNPATH" || $1=="RPATH" {printf "%s:", $2}' <<<"$dyn")"
+    for so in $needed; do
+      resolve_soname "$so" "$(dirname "$f")" "$runpaths" "$cache" || missing="$missing $so"
+    done
+  done
   # shellcheck disable=SC2086  # sonames: no spaces or glob characters
+  missing="$(printf '%s\n' $missing | sort -u | sed '/^$/d')"
+  if [ -z "$missing" ]; then
+    c_ok "all shared libraries resolve (readelf + ldconfig cache, nothing executed)"
+    return 0
+  fi
+
+  h_fail "missing shared libraries:"
   printf '    %s\n' $missing >&2
   fam="$(os_family)"
   case "$fam" in deb) col=1 ;; rpm) col=2 ;; arch) col=3 ;; suse) col=4 ;; *) col=0 ;; esac
-  for lib in $missing; do
-    pkgs="$(lib_pkg "$lib")"
-    [ -n "$pkgs" ] && [ "$col" -gt 0 ] && list="$list $(printf '%s' "$pkgs" | cut -d'|' -f"$col")"
+  for so in $missing; do
+    if [ "$col" -gt 0 ] && pkgs="$(lib_pkg "$so")"; then
+      name="$(cut -d'|' -f"$col" <<<"$pkgs")"
+      if [ "$fam" = deb ]; then
+        name="$(deb_pick_name "$name")" || unconfirmed="$unconfirmed $name"
+      fi
+      list="$list $name"
+    else
+      unmapped="$unmapped $so"
+    fi
   done
   # shellcheck disable=SC2086
-  list="$(printf '%s\n' $list | sort -u | tr '\n' ' ')"
-  if [ "$fam" = deb ] && ! deb_uses_t64; then
-    list="${list//t64/}"
-  fi
+  list="$(printf '%s\n' $list | sort -u | sed '/^$/d' | tr '\n' ' ')"
   if [ -n "${list// /}" ]; then
     case "$fam" in
       deb)  c_info "  likely fix: sudo apt install $list" ;;
@@ -318,10 +421,16 @@ check_libs() {
       arch) c_info "  likely fix: sudo pacman -S --needed $list" ;;
       suse) c_info "  likely fix: sudo zypper install $list" ;;
     esac
+    if [ -n "$unconfirmed" ]; then
+      # shellcheck disable=SC2086  # package names: no spaces or glob characters
+      unconfirmed="$(printf '%s\n' $unconfirmed | sort -u | tr '\n' ' ')"
+      c_info "  apt-cache could not confirm: $unconfirmed(run 'sudo apt update' and re-check)"
+    fi
     c_info "  (on an atomic system, add them to your image or use a distrobox container)"
-  else
-    c_info "  install the packages that provide the libraries above"
   fi
+  for so in $unmapped; do
+    c_info "  $so: not in the known list; find its package with: $(lib_search_cmd "$so" "$fam")"
+  done
 }
 
 # Name present on the session bus, running or D-Bus activatable.
