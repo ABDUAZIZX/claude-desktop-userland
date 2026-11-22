@@ -42,6 +42,11 @@ All must pass. `tests/run.sh` fails if the README usage block differs from
 `--help`, if the README hash differs from the script, or if the README URL
 does not point at `v$SELF_VERSION`, so steps 1 to 3 are checked here.
 
+The summary reads `N passed, M skipped, K failed`. A skip means a code path
+was not exercised on this machine (for example no `bsdtar`); it is not a pass.
+CI runs `bash tests/run.sh --no-skip`, where any skip fails the job, so do not
+merge unless CI is green.
+
 ## 5. Merge
 
 Open the pull request, wait for CI to pass, merge into `main`. Then confirm

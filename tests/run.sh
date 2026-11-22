@@ -5,9 +5,17 @@
 # functions are called directly. Every call that may exit runs in a subshell
 # so a die() fails one assertion instead of the whole suite.
 #
-# Usage: bash tests/run.sh            (no network, no root, touches only $TMPDIR)
+# Usage: bash tests/run.sh [--no-skip]  (no network, no root, touches only $TMPDIR)
+#   --no-skip  a test skipped for a missing tool counts as a failure (CI uses it)
 
 set -uo pipefail
+
+NO_SKIP=0
+case "${1:-}" in
+  --no-skip) NO_SKIP=1 ;;
+  "") : ;;
+  *) printf 'usage: bash tests/run.sh [--no-skip]\n' >&2; exit 2 ;;
+esac
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT="$HERE/../claude-desktop-userland.sh"
@@ -24,8 +32,11 @@ mkdir -p "$HOME"
 
 PASS=0
 FAIL=0
+SKIP=0
 ok()   { PASS=$((PASS + 1)); printf 'ok   %s\n' "$1"; }
-nok()  { FAIL=$((FAIL + 1)); printf 'FAIL %s\n' "$1"; [ -n "${2:-}" ] && printf '     %s\n' "$2"; }
+nok()  { FAIL=$((FAIL + 1)); printf 'FAIL %s\n' "$1"; [ -n "${2:-}" ] && printf '     %s\n' "$2"; return 0; }
+# skip <name> <reason> -- a test that could not run; never counted as passed
+skip() { SKIP=$((SKIP + 1)); printf 'SKIP %s (%s)\n' "$1" "$2"; }
 
 # expect_rc <expected-rc> <name> <command...>  -- runs the command in a subshell
 expect_rc() {
@@ -241,12 +252,13 @@ t_extract() {
   mkdir -p "$d"
   for comp in xz gz zst none; do
     if [ "$comp" = zst ] && ! command -v zstd >/dev/null 2>&1; then
-      printf 'skip zstd fixtures (zstd not installed)\n'; continue
+      for tool in bsdtar ar python3; do skip "extract data.tar.zst via $tool" "zstd not installed"; done
+      continue
     fi
     deb="$d/test-$comp.deb"; make_deb "$deb" "$comp"
     for tool in bsdtar ar python3; do
       if ! command -v "$tool" >/dev/null 2>&1; then
-        printf 'skip %s path for %s (%s not installed)\n' "$tool" "$comp" "$tool"; continue
+        skip "extract data.tar.$comp via $tool" "$tool not installed"; continue
       fi
       n=$((n + 1))
       expect_rc 0 "extract data.tar.$comp via $tool" extract_with "$tool" "$deb" "$d/out-$tool-$comp"
@@ -453,5 +465,9 @@ TESTS=(t_sourcing t_apparmor t_libs t_extract t_release_dates t_downgrade t_date
 
 for t in "${TESTS[@]}"; do "$t"; done
 
-printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
+printf '\n%d passed, %d skipped, %d failed\n' "$PASS" "$SKIP" "$FAIL"
+if [ "$NO_SKIP" = 1 ] && [ "$SKIP" -gt 0 ]; then
+  printf 'FAIL --no-skip: %d test(s) skipped\n' "$SKIP"
+  exit 1
+fi
 [ "$FAIL" = 0 ]
