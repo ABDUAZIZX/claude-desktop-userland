@@ -1127,16 +1127,19 @@ unpack_tar_member "$AR_TOOL" "$TMP/members/$control_m" "$CTRL" || die "could not
 [ -f "$CTRL/control" ] || die "control file missing from package"
 report_package_meta "$CTRL"
 [ "$MODE" = "inspect" ] && return 0
-# report_package_meta rebuilt the directory, so a record only exists when this
-# install used the option
-if [ "$SKIP_HOST_CHECK" = 1 ]; then
-  record_host_check_skip "$META_DIR/$VER" "${GLIBC_SEEN:-}" "${GLIBC_FLOOR_SKIPPED:-0}"
-  c_warn "recorded in $META_DIR/$VER/$SKIP_RECORD_NAME: installed with --skip-host-check"
-fi
 
 ROOT="$TMP/root"; mkdir -p "$ROOT"
 unpack_tar_member "$AR_TOOL" "$TMP/members/$data_m" "$ROOT" || die "could not unpack $data_m"
 c_ok "payload extracted"
+}
+
+# Written only after step_install_payload succeeded, so a failed run never
+# leaves a record behind. report_package_meta rebuilt package-meta/<ver> earlier
+# in this run, so a record exists only when this install used the option.
+step_record_host_check_skip() {
+  [ "$SKIP_HOST_CHECK" = 1 ] || return 0
+  record_host_check_skip "$META_DIR/$VER" "${GLIBC_SEEN:-}" "${GLIBC_FLOOR_SKIPPED:-0}"
+  c_warn "recorded in $META_DIR/$VER/$SKIP_RECORD_NAME: installed with --skip-host-check"
 }
 
 step_locate_app() {
@@ -1340,6 +1343,7 @@ main() {
   [ "$MODE" = "inspect" ] && return 0
   step_locate_app
   step_install_payload
+  step_record_host_check_skip
   step_write_launcher
   step_write_desktop_entry
   step_final_report

@@ -225,12 +225,20 @@ ar_pack() {
   return 0
 }
 
-# make_deb OUT DATA-COMPRESSION -- control.tar.xz + data.tar.<comp>
+# make_deb OUT DATA-COMPRESSION [app] -- control.tar.xz + data.tar.<comp>;
+# with "app" the payload also holds an executable claude-desktop and
+# resources/app.asar, so a full install can complete
 make_deb() {
   local out="$1" comp="$2" src="$WORK/debsrc.$2"
   rm -rf "$src"; mkdir -p "$src/ctl" "$src/data/usr/lib/claude-desktop" "$src/m"
   printf 'Package: claude-desktop\nVersion: 9.9.9\n' >"$src/ctl/control"
   printf 'payload\n' >"$src/data/usr/lib/claude-desktop/marker"
+  if [ "${3:-}" = app ]; then
+    mkdir -p "$src/data/usr/lib/claude-desktop/resources"
+    printf '#!/bin/sh\nexit 0\n' >"$src/data/usr/lib/claude-desktop/claude-desktop"
+    chmod +x "$src/data/usr/lib/claude-desktop/claude-desktop"
+    : >"$src/data/usr/lib/claude-desktop/resources/app.asar"
+  fi
   tar -C "$src/ctl" -cf - . | xz -c >"$src/m/control.tar.xz"
   case "$comp" in
     xz)   tar -C "$src/data" -cf - . | xz -c   >"$src/m/data.tar.xz" ;;
@@ -508,7 +516,7 @@ t_version_format() {
 # the Packages index and a small .deb from local files. main() then runs
 # unmodified, with KEY_FPR/REPO_BASE pointed at the fixture.
 make_repo_fixture() {
-  local fx="$1" date_e="$2" ver="$3" arch gh pkgsha pkgsize relsha
+  local fx="$1" date_e="$2" ver="$3" app="${4:-}" arch gh pkgsha pkgsize relsha
   case "$(uname -m)" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; *) return 1 ;; esac
   mkdir -p "$fx/gnupg" "$fx/srv/pool"; chmod 700 "$fx/gnupg"
   gh="$fx/gnupg"
@@ -517,7 +525,7 @@ make_repo_fixture() {
     GNUPGHOME="$gh" gpg --batch --quiet --armor --export 2>/dev/null >"$fx/srv/key.asc"
     GNUPGHOME="$gh" gpg --batch --with-colons --list-keys 2>/dev/null | awk -F: '/^fpr:/{print $10; exit}' >"$fx/fpr"
   fi
-  make_deb "$fx/srv/pool/pkg.deb" xz
+  make_deb "$fx/srv/pool/pkg.deb" xz "$app"
   pkgsha="$(sha256sum "$fx/srv/pool/pkg.deb" | cut -d' ' -f1)"
   printf 'Package: claude-desktop\nVersion: %s\nArchitecture: %s\nFilename: pool/pkg.deb\nSHA256: %s\n\n' \
     "$ver" "$arch" "$pkgsha" >"$fx/srv/Packages"
@@ -656,8 +664,44 @@ t_changelog() {
   expect_rc 0 "dated heading found below an Unreleased section" changelog_dated_heading "$f/e" 9.9.9
 }
 
+# --- host-check-skipped is written only after a successful install ----------
+t_skip_record_timing() {
+  if ! command -v gpg >/dev/null 2>&1; then
+    skip "host-check-skipped record timing" "gpg not installed"; return 0
+  fi
+  local fx="$WORK/repo-rec" home rec out now
+  now="$(date -u +%s)"
+  export FX="$fx"
+
+  # the fixture payload has no executable: install stops in step_locate_app,
+  # after extraction -- no record may be left
+  make_repo_fixture "$fx" $((now - 60)) 2.0.0 || { nok "build fixture (no app)"; return 0; }
+  home="$WORK/hrec-fail"; mkdir -p "$home"
+  rec="$home/.local/share/claude-desktop/package-meta/2.0.0/host-check-skipped"
+  out="$(run_main_offline "$fx" "$home" --force --skip-host-check)"
+  if grep -q 'could not identify the main executable' <<<"$out" && [ ! -e "$rec" ]; then
+    ok "install failing after extraction leaves no host-check-skipped record"
+  else
+    nok "install failing after extraction leaves no host-check-skipped record" "record=$( [ -e "$rec" ] && echo present || echo absent): $(tail -n 3 <<<"$out")"
+  fi
+
+  # same with a complete payload: the install succeeds and the record is written
+  make_repo_fixture "$fx" $((now - 30)) 2.0.0 app || { nok "build fixture (app)"; return 0; }
+  home="$WORK/hrec-ok"; mkdir -p "$home"
+  rec="$home/.local/share/claude-desktop/package-meta/2.0.0/host-check-skipped"
+  out="$(run_main_offline "$fx" "$home" --force --skip-host-check)"
+  if [ -L "$home/.local/share/claude-desktop/current" ] && [ -f "$rec" ] \
+     && grep -q '^option=--skip-host-check$' "$rec" \
+     && grep -q 'glibc check: 2.0.0 was installed with --skip-host-check' <<<"$out"; then
+    ok "successful install writes the record and the post-install check reports it"
+  else
+    nok "successful install writes the record and the post-install check reports it" "$(tail -n 5 <<<"$out")"
+  fi
+  unset FX
+}
+
 # Test groups register themselves here.
-TESTS=(t_sourcing t_apparmor t_libs t_extract t_release_dates t_downgrade t_date_floor t_skip_record t_readme t_version_format t_date_floor_modes t_changelog)
+TESTS=(t_sourcing t_apparmor t_libs t_extract t_release_dates t_downgrade t_date_floor t_skip_record t_readme t_version_format t_date_floor_modes t_changelog t_skip_record_timing)
 
 for t in "${TESTS[@]}"; do "$t"; done
 
