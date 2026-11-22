@@ -337,6 +337,14 @@ t_downgrade() {
   expect_rc 0 "--allow-downgrade alone means install"    parse_args --allow-downgrade
   expect_rc 1 "--allow-downgrade rejected with --doctor" parse_args --doctor --allow-downgrade
   expect_rc 1 "two mode options rejected"                parse_args --check --force
+
+  expect_rc 0 "--skip-host-check accepted with install"   parse_args --skip-host-check
+  expect_rc 0 "--skip-host-check accepted with --force"   parse_args --force --skip-host-check
+  expect_rc 1 "--skip-host-check rejected with --check"   parse_args --check --skip-host-check
+  expect_rc 1 "--skip-host-check rejected with --doctor"  parse_args --doctor --skip-host-check
+  # the old environment variable must have no effect any more
+  expect_out 'SKIP=0' "CLAUDE_SKIP_HOST_CHECK env var ignored" \
+    env CLAUDE_SKIP_HOST_CHECK=1 bash -c '. "$1"; parse_args; echo "SKIP=$SKIP_HOST_CHECK"' _ "$SCRIPT"
 }
 
 # --- Date floor ---------------------------------------------------------------

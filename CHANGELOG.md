@@ -14,7 +14,8 @@
   xdg-desktop-portal on the session bus. Runs automatically after install
 - `--print-apparmor-profile`: userns profile for the install path, with load
   and removal instructions and the trade-off spelled out
-- glibc check before the download; `CLAUDE_SKIP_HOST_CHECK=1` overrides
+- glibc check before the download; `--skip-host-check` (install and
+  `--force` only) skips it
 - Launcher: warns about the AppArmor restriction, honours
   `CLAUDE_PASSWORD_STORE`
 - Cowork report no longer claims `/dev/kvm` is sufficient

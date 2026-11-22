@@ -674,6 +674,10 @@ bootc system, without dpkg, without layering, without root.
                 installed, and an index Date older than the last one
                 verified (with a warning). Never bypasses the signature or
                 Valid-Until checks
+  --skip-host-check
+                modifier for install and --force: skip the glibc check
+                that runs before the download. Compatibility only; no
+                signature, freshness or downgrade check is affected
   --doctor      check this host can run the app (glibc, sandbox, shared
                 libraries, keyring, portals); offline, changes nothing
   --print-apparmor-profile
@@ -687,14 +691,16 @@ USAGE
 }
 
 # --- argument parsing ------------------------------------------------------
-# One mode option at most, plus the --allow-downgrade modifier.
+# One mode option at most, plus the --allow-downgrade / --skip-host-check modifiers.
 parse_args() {
   MODE="install"
   ALLOW_DOWNGRADE=0
+  SKIP_HOST_CHECK=0
   local seen="" m
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --allow-downgrade) ALLOW_DOWNGRADE=1; shift; continue ;;
+      --skip-host-check) SKIP_HOST_CHECK=1; shift; continue ;;
       --uninstall)     m="uninstall" ;;
       --purge)         m="purge" ;;
       --check)         m="check" ;;
@@ -713,6 +719,12 @@ parse_args() {
     case "$MODE" in
       install|force|check|inspect) : ;;
       *) die "--allow-downgrade only applies to install, --force, --check and --inspect" ;;
+    esac
+  fi
+  if [ "$SKIP_HOST_CHECK" = 1 ]; then
+    case "$MODE" in
+      install|force) : ;;
+      *) die "--skip-host-check only applies to install and --force" ;;
     esac
   fi
 }
@@ -735,9 +747,9 @@ AR_TOOL="$(pick_ar_tool)" || die "need one of bsdtar (libarchive), ar (binutils)
 
 # Refuse before a 160 MB download on hosts that cannot load the binary at all.
 # The remaining checks run after installation, when there is a binary to test.
-if [ "$MODE" != "check" ] && [ "$MODE" != "inspect" ] && [ "${CLAUDE_SKIP_HOST_CHECK:-0}" != "1" ]; then
+if [ "$MODE" != "check" ] && [ "$MODE" != "inspect" ] && [ "$SKIP_HOST_CHECK" != 1 ]; then
   check_libc
-  [ "$HOST_FAIL" = 0 ] || die "this host cannot run the upstream build (override: CLAUDE_SKIP_HOST_CHECK=1)"
+  [ "$HOST_FAIL" = 0 ] || die "this host cannot run the upstream build (override: --skip-host-check)"
 fi
 
 ARCH="$(uname -m)"

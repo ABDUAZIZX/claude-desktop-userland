@@ -113,8 +113,10 @@ work here.
 | `CLAUDE_FORCE_X11=1` | Run under XWayland instead of the native Wayland backend |
 | `CLAUDE_PASSWORD_STORE=basic` | Pass `--password-store=basic`. For sessions without a Secret Service (bare window managers), where the login would otherwise not persist. The token is then stored with weak obfuscation only |
 
-The installer itself honours `CLAUDE_SKIP_HOST_CHECK=1`, which skips the glibc
-check that otherwise stops an install before the download.
+The installer reads no environment variables that change its checks. The
+glibc check that stops an install before the download can be skipped with the
+`--skip-host-check` option (install and `--force` only); it is a
+compatibility check and touches no signature, freshness or downgrade check.
 
 Under a Wayland session the launcher adds `--ozone-platform-hint=auto` and
 `--enable-features=WaylandWindowDecorations`, which fixes fractional scaling
