@@ -339,8 +339,32 @@ t_downgrade() {
   expect_rc 1 "two mode options rejected"                parse_args --check --force
 }
 
+# --- Date floor ---------------------------------------------------------------
+t_date_floor() {
+  local d="$WORK/state" st
+  mkdir -p "$d"; st="$d/last-release-date"
+  expect_rc 0 "no saved Date -> any Date accepted" check_date_floor 1000 "$st" 0
+  save_release_date "$st" 2000
+  [ "$(cat "$st")" = 2000 ] && ok "verified Date saved" || nok "verified Date saved"
+  expect_rc 1 "Date older than saved -> rejected"      check_date_floor 1999 "$st" 0
+  expect_out 'older than the last verified' "rejection explains the rollback" check_date_floor 1999 "$st" 0
+  expect_rc 0 "Date equal to saved -> accepted"         check_date_floor 2000 "$st" 0
+  expect_rc 0 "Date newer than saved -> accepted"       check_date_floor 2001 "$st" 0
+  expect_rc 0 "older Date with --allow-downgrade -> accepted" check_date_floor 1999 "$st" 1
+  expect_out 'OLDER INDEX' "allowed older Date prints a warning" check_date_floor 1999 "$st" 1
+
+  save_release_date "$st" 1500
+  [ "$(cat "$st")" = 2000 ] && ok "saving an older Date never lowers the floor" || nok "saving an older Date never lowers the floor" "$(cat "$st")"
+  save_release_date "$st" 3000
+  [ "$(cat "$st")" = 3000 ] && ok "saving a newer Date raises the floor" || nok "saving a newer Date raises the floor"
+
+  printf 'garbage\n' >"$st"
+  expect_rc 1 "corrupt state file fails closed" check_date_floor 5000 "$st" 0
+  expect_rc 1 "corrupt state file is not overwritten silently" save_release_date "$st" 5000
+}
+
 # Test groups register themselves here.
-TESTS=(t_sourcing t_apparmor t_libs t_extract t_release_dates t_downgrade)
+TESTS=(t_sourcing t_apparmor t_libs t_extract t_release_dates t_downgrade t_date_floor)
 
 for t in "${TESTS[@]}"; do "$t"; done
 

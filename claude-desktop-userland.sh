@@ -44,6 +44,8 @@ SELF_VERSION="1.1.0"
 BASE="${XDG_DATA_HOME:-$HOME/.local/share}/claude-desktop"
 VERSIONS="$BASE/versions"
 META_DIR="$BASE/package-meta"
+STATE_DIR="$BASE/state"
+RELEASE_DATE_STATE="$STATE_DIR/last-release-date"   # epoch of the newest verified index Date
 CURRENT="$BASE/current"
 BIN="$HOME/.local/bin/claude-desktop"
 DESKTOP_FILE="${XDG_DATA_HOME:-$HOME/.local/share}/applications/claude-desktop.desktop"
@@ -590,6 +592,49 @@ check_version_order() {
   return 1
 }
 
+# read_saved_release_date STATE-FILE -- prints the saved epoch, empty if none.
+# A corrupt file fails closed rather than silently resetting the floor.
+read_saved_release_date() {
+  local f="$1" v=""
+  [ -e "$f" ] || return 0
+  read -r v <"$f" || true
+  if ! [[ "$v" =~ ^[0-9]+$ ]]; then
+    c_err "state file $f is corrupt (expected an epoch); delete it to reset the Date floor"
+    return 1
+  fi
+  echo "$v"
+}
+
+# check_date_floor DATE-EPOCH STATE-FILE ALLOW-DOWNGRADE(0|1)
+# Refuses an index whose Date is older than the newest one already verified.
+check_date_floor() {
+  local date_e="$1" state="$2" allow="$3" saved
+  saved="$(read_saved_release_date "$state")" || return 1
+  [ -n "$saved" ] || return 0
+  [ "$date_e" -lt "$saved" ] || return 0
+  if [ "$allow" = 1 ]; then
+    c_warn "OLDER INDEX: Date $(date -u -d "@$date_e" '+%F %T UTC') is older than the last verified $(date -u -d "@$saved" '+%F %T UTC') (--allow-downgrade)"
+    return 0
+  fi
+  c_err "repository index Date $(date -u -d "@$date_e" '+%F %T UTC') is older than the last verified $(date -u -d "@$saved" '+%F %T UTC')"
+  c_err "  an older signed index can be a rollback attack; refusing"
+  c_info "  if this is intended, re-run with --allow-downgrade"
+  return 1
+}
+
+# save_release_date STATE-FILE DATE-EPOCH -- keeps the maximum, written atomically.
+# Called only after the whole chain verified, so the floor never moves on a
+# partial or failed run, and never moves backwards (even with --allow-downgrade).
+save_release_date() {
+  local f="$1" new="$2" saved
+  saved="$(read_saved_release_date "$f")" || return 1
+  if [ -n "$saved" ] && [ "$saved" -ge "$new" ]; then
+    return 0
+  fi
+  mkdir -p "$(dirname "$f")"
+  printf '%s\n' "$new" >"$f.tmp.$$" && mv -f "$f.tmp.$$" "$f"
+}
+
 # --- uninstall -------------------------------------------------------------
 do_uninstall() {
   local purge="${1:-no}"
@@ -626,7 +671,9 @@ bootc system, without dpkg, without layering, without root.
   --force       reinstall even if already up to date
   --allow-downgrade
                 modifier: accept a repository version older than the one
-                installed. Never bypasses the signature or Valid-Until checks
+                installed, and an index Date older than the last one
+                verified (with a warning). Never bypasses the signature or
+                Valid-Until checks
   --doctor      check this host can run the app (glibc, sandbox, shared
                 libraries, keyring, portals); offline, changes nothing
   --print-apparmor-profile
@@ -735,6 +782,7 @@ inrelease_well_formed InRelease || die "InRelease is not a single clear-signed b
   || die "InRelease signature verification FAILED"
 c_ok "InRelease signature valid"
 verify_release_freshness Release.verified "$(date -u +%s)" || die "repository index failed the freshness check"
+check_date_floor "$RELEASE_DATE_EPOCH" "$RELEASE_DATE_STATE" "$ALLOW_DOWNGRADE" || die "older repository index refused"
 
 # --- 3. verify Packages index ----------------------------------------------
 IDX_PATH="main/binary-${DEB_ARCH}/Packages"
@@ -1187,6 +1235,8 @@ main() {
   fi
 
   step_download_package
+  # key, InRelease, Packages and .deb all verified: raise the Date floor
+  save_release_date "$RELEASE_DATE_STATE" "$RELEASE_DATE_EPOCH" || die "could not record the verified index Date"
   step_extract_package
   [ "$MODE" = "inspect" ] && return 0
   step_locate_app

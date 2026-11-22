@@ -82,6 +82,12 @@ verification, `Date` and `Valid-Until` are read from `Release.verified` only:
   could otherwise pin you to an older release (replay).
 - `Date` more than 10 minutes ahead of the local clock: refused.
 - Either field missing or unparseable: refused.
+- `Date` older than the newest `Date` already verified on this machine:
+  refused. The floor lives in `~/.local/share/claude-desktop/state/last-release-date`
+  and is raised only after the whole chain, `.deb` checksum included, has
+  verified (install, `--force`, `--inspect`). It never moves backwards.
+  `--allow-downgrade` accepts an older `Date` with a warning; it does not
+  touch the signature or `Valid-Until` checks.
 
 ## Link 4: Packages index
 

@@ -70,6 +70,13 @@ and `InRelease` must be a single clear-signed block with nothing outside it.
 A badly wrong system clock makes either check misfire, in the safe direction
 (refusal). Missing `Date` or `Valid-Until` fields also cause a refusal.
 
+**The `Date` floor is local and resettable.** The newest verified `Date` is
+kept in `~/.local/share/claude-desktop/state/`. It is raised only when a
+`.deb` is downloaded and verified, so runs that end with "already up to date"
+do not move it. `--uninstall` removes it with the rest of the install, and
+anything that can write to your home directory can edit it. A corrupt state
+file stops the install until you delete it.
+
 **Downgrade protection is by version comparison.** If the newest version in
 the signed index is older than the installed one (`sort -V`), the install is
 refused; `--check` reports it. `--allow-downgrade` accepts it with a warning,
