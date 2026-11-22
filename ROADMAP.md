@@ -61,10 +61,6 @@ tested:
 
 ## Small follow-ups
 
-- **Rename the workflow to `ci`.** `.github/workflows/shellcheck.yml` (job
-  `lint`) now runs syntax checks, shellcheck and the unit tests; the name
-  should say so. Branch protection rules that reference the check name must
-  be updated in the same change.
 - **Update the script header comment.** The block at the top of
   `claude-desktop-userland.sh` still describes an rpm-ostree / bootc-only
   installer and lists only the original options. It should match the current
