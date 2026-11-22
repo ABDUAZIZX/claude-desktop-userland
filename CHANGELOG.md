@@ -38,6 +38,9 @@
 - `Valid-Until` enforced, and a `Date` more than 10 minutes in the future is
   refused; both read from gpg's verified output only. `InRelease` must be a
   single clear-signed block with no text outside it
+- Downgrade refused when the repository's newest version is older than the
+  installed one; `--allow-downgrade` overrides with a warning (never the
+  signature or `Valid-Until`). Options are parsed as one mode plus modifiers
 
 ## 1.0.0
 

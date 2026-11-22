@@ -322,8 +322,25 @@ REL
   expect_rc 1 "two signed blocks rejected" inrelease_well_formed "$d/InRelease.double"
 }
 
+# --- downgrade protection ----------------------------------------------------
+t_downgrade() {
+  expect_rc 1 "older version refused"                    check_version_order 6.28899.6 5.11492.5 0
+  expect_out 'older than the installed' "refusal names the rollback" check_version_order 6.28899.6 5.11492.5 0
+  expect_rc 0 "older version accepted with --allow-downgrade" check_version_order 6.28899.6 5.11492.5 1
+  expect_out 'DOWNGRADE' "allowed downgrade prints a warning"   check_version_order 6.28899.6 5.11492.5 1
+  expect_rc 0 "newer version accepted"                   check_version_order 5.11492.5 6.28899.6 0
+  expect_rc 0 "same version accepted (--force reinstall)" check_version_order 6.28899.6 6.28899.6 0
+  expect_rc 0 "nothing installed -> accepted"            check_version_order "" 6.28899.6 0
+  expect_rc 1 "sort -V, not lexical: 6.9 < 6.10"         check_version_order 6.10.0 6.9.0 0
+
+  expect_rc 0 "--allow-downgrade combines with --force"  parse_args --force --allow-downgrade
+  expect_rc 0 "--allow-downgrade alone means install"    parse_args --allow-downgrade
+  expect_rc 1 "--allow-downgrade rejected with --doctor" parse_args --doctor --allow-downgrade
+  expect_rc 1 "two mode options rejected"                parse_args --check --force
+}
+
 # Test groups register themselves here.
-TESTS=(t_sourcing t_apparmor t_libs t_extract t_release_dates)
+TESTS=(t_sourcing t_apparmor t_libs t_extract t_release_dates t_downgrade)
 
 for t in "${TESTS[@]}"; do "$t"; done
 

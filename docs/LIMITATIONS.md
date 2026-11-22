@@ -70,10 +70,12 @@ and `InRelease` must be a single clear-signed block with nothing outside it.
 A badly wrong system clock makes either check misfire, in the safe direction
 (refusal). Missing `Date` or `Valid-Until` fields also cause a refusal.
 
-**No downgrade protection beyond version comparison.** The script installs the
-highest version in the index. If a compromised index legitimately signed by
-Anthropic listed an older vulnerable build as the only entry, the script would
-install it.
+**Downgrade protection is by version comparison.** If the newest version in
+the signed index is older than the installed one (`sort -V`), the install is
+refused; `--check` reports it. `--allow-downgrade` accepts it with a warning,
+for the case where upstream deliberately pulls a release. It never bypasses
+the signature or `Valid-Until`. A first install has nothing to compare
+against.
 
 **Fingerprint pinning is manual.** Key rotation requires a repository update.
 Watch upstream announcements. A hard failure with `fingerprint mismatch!` is

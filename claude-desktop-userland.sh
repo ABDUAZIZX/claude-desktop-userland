@@ -568,6 +568,28 @@ verify_release_freshness() {
   c_ok "index fresh: Date $d, valid until $v"
 }
 
+# version_lt A B -- true when A sorts strictly before B (sort -V)
+version_lt() {
+  [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n1)" = "$1" ]
+}
+
+# check_version_order INSTALLED AVAILABLE ALLOW-DOWNGRADE(0|1)
+# Refuses an available version older than the installed one unless allowed.
+# --allow-downgrade never bypasses the signature or Valid-Until checks.
+check_version_order() {
+  local inst="$1" avail="$2" allow="$3"
+  [ -n "$inst" ] || return 0
+  version_lt "$avail" "$inst" || return 0
+  if [ "$allow" = 1 ]; then
+    c_warn "DOWNGRADE: installing $avail over $inst (--allow-downgrade)"
+    return 0
+  fi
+  c_err "the repository offers $avail, older than the installed $inst"
+  c_err "  a signed but older index can be a rollback attack; refusing"
+  c_info "  if this is intended (e.g. upstream pulled a release), re-run with --allow-downgrade"
+  return 1
+}
+
 # --- uninstall -------------------------------------------------------------
 do_uninstall() {
   local purge="${1:-no}"
@@ -602,6 +624,9 @@ bootc system, without dpkg, without layering, without root.
   --inspect     download latest, show package relations and maintainer
                 scripts, diff against the last seen version; no install
   --force       reinstall even if already up to date
+  --allow-downgrade
+                modifier: accept a repository version older than the one
+                installed. Never bypasses the signature or Valid-Until checks
   --doctor      check this host can run the app (glibc, sandbox, shared
                 libraries, keyring, portals); offline, changes nothing
   --print-apparmor-profile
@@ -615,21 +640,34 @@ USAGE
 }
 
 # --- argument parsing ------------------------------------------------------
+# One mode option at most, plus the --allow-downgrade modifier.
 parse_args() {
   MODE="install"
-  case "${1:-}" in
-    --uninstall)     MODE="uninstall" ;;
-    --purge)         MODE="purge" ;;
-    --check)         MODE="check" ;;
-    --inspect)       MODE="inspect" ;;
-    --force)         MODE="force" ;;
-    --doctor)        MODE="doctor" ;;
-    --print-apparmor-profile) MODE="apparmor" ;;
-    -h|--help)       MODE="help" ;;
-    -V|--version)    MODE="version" ;;
-    "")              : ;;
-    *)               usage >&2; die "unknown option: $1" ;;
-  esac
+  ALLOW_DOWNGRADE=0
+  local seen="" m
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --allow-downgrade) ALLOW_DOWNGRADE=1; shift; continue ;;
+      --uninstall)     m="uninstall" ;;
+      --purge)         m="purge" ;;
+      --check)         m="check" ;;
+      --inspect)       m="inspect" ;;
+      --force)         m="force" ;;
+      --doctor)        m="doctor" ;;
+      --print-apparmor-profile) m="apparmor" ;;
+      -h|--help)       m="help" ;;
+      -V|--version)    m="version" ;;
+      *)               usage >&2; die "unknown option: $1" ;;
+    esac
+    [ -z "$seen" ] || die "options $seen and $1 cannot be combined"
+    seen="$1"; MODE="$m"; shift
+  done
+  if [ "$ALLOW_DOWNGRADE" = 1 ]; then
+    case "$MODE" in
+      install|force|check|inspect) : ;;
+      *) die "--allow-downgrade only applies to install, --force, --check and --inspect" ;;
+    esac
+  fi
 }
 
 run_doctor() {
@@ -1131,8 +1169,17 @@ main() {
   step_fetch_verified_index
   step_select_package
   if [ "$MODE" = "check" ]; then
-    if [ "$INSTALLED_VER" = "$VER" ]; then c_ok "up to date"; else c_warn "update available"; fi
+    if [ "$INSTALLED_VER" = "$VER" ]; then
+      c_ok "up to date"
+    elif [ -n "$INSTALLED_VER" ] && version_lt "$VER" "$INSTALLED_VER"; then
+      c_warn "repository offers an OLDER version than installed; an install would refuse it"
+    else
+      c_warn "update available"
+    fi
     return 0
+  fi
+  if [ "$MODE" = "install" ] || [ "$MODE" = "force" ]; then
+    check_version_order "$INSTALLED_VER" "$VER" "$ALLOW_DOWNGRADE" || die "downgrade refused"
   fi
   if [ "$INSTALLED_VER" = "$VER" ] && [ "$MODE" = "install" ]; then
     c_ok "already up to date, nothing to do (use --force to reinstall)"

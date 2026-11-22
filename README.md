@@ -94,6 +94,7 @@ ln -sfn ~/.local/share/claude-desktop/versions/<older> \
 | `./claude-desktop-userland.sh --check` | Compare installed vs. available, change nothing |
 | `./claude-desktop-userland.sh --force` | Reinstall the current version |
 | `./claude-desktop-userland.sh --inspect` | Download and verify the latest package, show its `Depends` and maintainer scripts and diff them against the last version seen. Installs nothing |
+| `./claude-desktop-userland.sh --allow-downgrade` | Modifier for install, `--force`, `--check`, `--inspect`: accept a repository version older than the installed one, with a warning. Never bypasses the signature or `Valid-Until` |
 | `./claude-desktop-userland.sh --doctor` | Check this host can run the app: glibc, sandbox, shared libraries, keyring, portals. Offline, changes nothing, exits non-zero on a blocking problem |
 | `./claude-desktop-userland.sh --print-apparmor-profile` | Print an AppArmor profile for hosts that restrict user namespaces (Ubuntu 24.04+), with install instructions |
 | `./claude-desktop-userland.sh --uninstall` | Remove the app, keep `~/.config/Claude` |
