@@ -33,6 +33,8 @@
   `tarfile` is never used. Member names validated before extraction.
   `python3` and `tar` are no longer unconditional requirements; `gpg2` is
   accepted when `gpg` is absent
+- Secret Service: detection and warning only, `basic` is never selected
+  automatically; documented as untested on bare window managers
 
 ## 1.0.0
 

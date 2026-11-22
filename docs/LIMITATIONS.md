@@ -124,11 +124,18 @@ under `/usr`. An atomic image without them cannot provide them from userland.
 The rest of the application is unaffected. `--doctor` reports whether all three
 are present.
 
-**Secret Service.** The login token is stored through the Secret Service API
-(gnome-keyring, KWallet, KeePassXC). Without one on the session bus, as is
-common on bare window managers, you are asked to sign in on every launch.
-`--doctor` checks for it. `CLAUDE_PASSWORD_STORE=basic` is the fallback, at the
-cost of weak obfuscation on disk.
+**Secret Service.** *Not yet tested on a bare window manager* (i3, sway,
+Hyprland). What follows is the design, not a verified result.
+
+The login token is stored through the Secret Service API (gnome-keyring,
+KWallet, KeePassXC). Without one on the session bus, as is common on bare
+window managers, the expectation is that you are asked to sign in on every
+launch. The script only detects and warns: `--doctor` and the post-install
+check look for `org.freedesktop.secrets` on the session bus (running or
+D-Bus-activatable). Nothing is switched automatically. Setting
+`CLAUDE_PASSWORD_STORE=basic` yourself makes the launcher pass
+`--password-store=basic`, which keeps the token with weak obfuscation in
+`~/.config/Claude` instead of a keyring.
 
 **SELinux.** Payloads under `~/.local/share` are labelled `data_home_t` and
 Electron runs fine. If you relocate the install to a non-standard mount point,
