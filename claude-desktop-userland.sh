@@ -102,12 +102,15 @@ installed_binname() {
 # warning is always shown.
 check_libc() {
   local skip="${1:-}" v
+  GLIBC_FLOOR_SKIPPED=0
+  GLIBC_SEEN=""
   if [ -e /etc/NIXOS ]; then
     c_warn "NixOS detected: the upstream binary expects an FHS layout."
     c_warn "  enable programs.nix-ld (with the libraries reported below) or run it via steam-run"
   fi
   v="$(getconf GNU_LIBC_VERSION 2>/dev/null || true)"   # "glibc 2.39"
   v="${v##* }"
+  GLIBC_SEEN="$v"
   if [ -z "$v" ]; then
     h_fail "glibc not found (musl-based system?); the upstream build needs glibc >= $MIN_GLIBC"
     c_info "  use a glibc distrobox/toolbox container instead"
@@ -117,6 +120,7 @@ check_libc() {
     c_ok "glibc $v (>= $MIN_GLIBC)"
   else
     if [ "$skip" = skip-floor ]; then
+      GLIBC_FLOOR_SKIPPED=1
       c_warn "glibc $v is older than the required $MIN_GLIBC; continuing because of --skip-host-check"
       c_warn "  the app will most likely fail to start on this host"
     else
@@ -129,6 +133,43 @@ check_libc() {
 # aa_restricts_userns [sysctl-file]
 # The sysctl only exists on Ubuntu kernels. A missing or unreadable file means
 # "no restriction" and is not an error. Returns 0 only for the value 1.
+# --- record of a skipped host check -------------------------------------------
+SKIP_RECORD_NAME="host-check-skipped"
+
+# record_host_check_skip META-VERSION-DIR GLIBC FLOOR-VIOLATED(0|1)
+record_host_check_skip() {
+  mkdir -p "$1"
+  {
+    printf 'option=--skip-host-check\n'
+    printf 'glibc=%s\n' "${2:-unknown}"
+    printf 'required=%s\n' "$MIN_GLIBC"
+    printf 'floor_violated=%s\n' "$3"
+    printf 'recorded=%s\n' "$(date -u '+%F %T UTC')"
+  } >"$1/$SKIP_RECORD_NAME"
+  chmod 644 "$1/$SKIP_RECORD_NAME"
+}
+
+# check_host_check_record [meta-dir] [current-link]
+# Part of the glibc section of --doctor and the post-install check: an install
+# made with --skip-host-check is reported as a glibc failure until the version
+# is reinstalled without the option. Not used by the pre-download check, so a
+# normal upgrade can still clear the record.
+check_host_check_record() {
+  local meta="${1:-$META_DIR}" cur="${2:-$CURRENT}" ver rec glibc
+  [ -L "$cur" ] || return 0
+  ver="$(basename "$(readlink -f "$cur")")"
+  rec="$meta/$ver/$SKIP_RECORD_NAME"
+  [ -f "$rec" ] || return 0
+  glibc="$(sed -n 's/^glibc=//p' "$rec")"
+  h_fail "glibc check: $ver was installed with --skip-host-check (glibc ${glibc:-unknown} at install time, required $MIN_GLIBC)"
+  c_info "  record: $rec"
+  if [ "$(sed -n 's/^floor_violated=//p' "$rec")" = 1 ]; then
+    c_info "  once glibc >= $MIN_GLIBC, reinstall without the option (--force) to clear it"
+  else
+    c_info "  the floor was met at install time; reinstall without the option (--force) to clear it"
+  fi
+}
+
 aa_restricts_userns() {
   local f="${1:-$AA_SYSCTL}" v=""
   [ -r "$f" ] || return 1
@@ -507,6 +548,7 @@ run_host_checks() {
   local t
   for t in getconf awk find sort grep cut readlink; do need "$t"; done
   check_libc
+  check_host_check_record
   check_userns
   check_libs
   check_session_services
@@ -1072,6 +1114,12 @@ unpack_tar_member "$AR_TOOL" "$TMP/members/$control_m" "$CTRL" || die "could not
 [ -f "$CTRL/control" ] || die "control file missing from package"
 report_package_meta "$CTRL"
 [ "$MODE" = "inspect" ] && return 0
+# report_package_meta rebuilt the directory, so a record only exists when this
+# install used the option
+if [ "$SKIP_HOST_CHECK" = 1 ]; then
+  record_host_check_skip "$META_DIR/$VER" "${GLIBC_SEEN:-}" "${GLIBC_FLOOR_SKIPPED:-0}"
+  c_warn "recorded in $META_DIR/$VER/$SKIP_RECORD_NAME: installed with --skip-host-check"
+fi
 
 ROOT="$TMP/root"; mkdir -p "$ROOT"
 unpack_tar_member "$AR_TOOL" "$TMP/members/$data_m" "$ROOT" || die "could not unpack $data_m"

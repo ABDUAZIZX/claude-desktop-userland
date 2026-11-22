@@ -18,6 +18,10 @@
   `--force` only) skips the version floor only, never the musl refusal
 - `CLAUDE_SKIP_HOST_CHECK` has no effect; when set, a warning points to
   `--skip-host-check`
+- An install made with `--skip-host-check` is recorded in
+  `package-meta/<version>/host-check-skipped`; `--doctor` and the
+  post-install check report it as a glibc failure until that version is
+  reinstalled without the option
 - Launcher: warns about the AppArmor restriction, honours
   `CLAUDE_PASSWORD_STORE`
 - Cowork report no longer claims `/dev/kvm` is sufficient

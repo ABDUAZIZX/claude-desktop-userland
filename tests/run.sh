@@ -397,8 +397,39 @@ t_date_floor() {
   expect_rc 1 "corrupt state file is not overwritten silently" save_release_date "$st" 5000
 }
 
+# --- record of --skip-host-check ----------------------------------------------
+t_skip_record() {
+  local d="$WORK/skiprec" out
+  mkdir -p "$d/meta" "$d/versions/6.0.0"
+  ln -sfn "$d/versions/6.0.0" "$d/current"
+  expect_rc 0 "no record -> no glibc failure" check_host_check_record "$d/meta" "$d/current"
+
+  record_host_check_skip "$d/meta/6.0.0" 2.31 1
+  grep -q '^option=--skip-host-check$' "$d/meta/6.0.0/host-check-skipped" \
+    && grep -q '^glibc=2.31$' "$d/meta/6.0.0/host-check-skipped" \
+    && ok "record written with option and glibc" || nok "record written with option and glibc"
+  out="$( (HOST_FAIL=0; check_host_check_record "$d/meta" "$d/current"; echo "HOST_FAIL=$HOST_FAIL") 2>&1 )"
+  if grep -q 'HOST_FAIL=1' <<<"$out" && grep -q 'glibc check: 6.0.0 was installed with --skip-host-check' <<<"$out"; then
+    ok "doctor reports the skipped install as a glibc failure"
+  else
+    nok "doctor reports the skipped install as a glibc failure" "$out"
+  fi
+  expect_out 'once glibc >= ' "violated floor: advice mentions upgrading glibc" check_host_check_record "$d/meta" "$d/current"
+  record_host_check_skip "$d/meta/6.0.0" 2.39 0
+  expect_out 'floor was met at install time' "floor met: advice says so" check_host_check_record "$d/meta" "$d/current"
+  # record belongs to a version: another current version is clean
+  mkdir -p "$d/versions/7.0.0"; ln -sfn "$d/versions/7.0.0" "$d/current"
+  expect_rc 0 "record of another version does not fail the current one" check_host_check_record "$d/meta" "$d/current"
+  # the pre-download check must not read the record (an upgrade can clear it)
+  if grep -q 'check_host_check_record' <<<"$(declare -f step_preflight)"; then
+    nok "pre-download check ignores the record"
+  else
+    ok "pre-download check ignores the record"
+  fi
+}
+
 # Test groups register themselves here.
-TESTS=(t_sourcing t_apparmor t_libs t_extract t_release_dates t_downgrade t_date_floor)
+TESTS=(t_sourcing t_apparmor t_libs t_extract t_release_dates t_downgrade t_date_floor t_skip_record)
 
 for t in "${TESTS[@]}"; do "$t"; done
 
