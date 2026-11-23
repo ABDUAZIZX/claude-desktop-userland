@@ -156,3 +156,52 @@ Being explicit about the residual trust:
   case.
 - **Chromium's sandbox** for renderer isolation, which requires unprivileged
   user namespaces since `chrome-sandbox` is not setuid here.
+
+## The installer itself: one root of trust
+
+Everything above verifies Anthropic's package. The script that does the
+verifying comes from this project, and its own chain has a single root: the
+maintainer's GitHub account (`ABDUAZIZX`). There is no second, independent
+source for the release signing key or its fingerprint.
+
+```
+GitHub account ABDUAZIZX
+   |-- repository: script, README (install hash, key fingerprint), tags
+   |-- Releases: claude-desktop-userland.sh, SHA256SUMS, SHA256SUMS.sig
+   '-- SSH signing key registered on the account (the public half)
+```
+
+What the signatures cover:
+
+- **Signed tags and `SHA256SUMS.sig`** (from 1.2.0) prove that the files were
+  signed with the maintainer's SSH key. The private key is not stored on
+  GitHub, so someone who can change release assets or push to the repository
+  (a leaked token with write access, a compromised workflow, an edited
+  release) cannot produce a valid signature. Tampered assets, a swapped
+  script or an edited `SHA256SUMS` fail `ssh-keygen -Y verify`.
+- **The README install hash** only proves the download matches what the
+  repository says. It catches corruption and a changed file at the pinned
+  tag, not a change made by someone who can also edit the README.
+
+What they do **not** cover:
+
+- **A compromise of the GitHub account.** Whoever controls the account can
+  register a new signing key, replace the fingerprint in the README, push
+  new signed tags and publish new release files. A user who fetches the key
+  from the account after that point verifies the attacker's signature
+  successfully. The fingerprint in the README offers no independent check
+  either, because it is published through the same account.
+- **A compromise of the private signing key** (it lives on the maintainer's
+  machine). Signatures made with it are indistinguishable from real ones
+  until the key is revoked.
+
+What still helps against an account compromise, partially:
+
+- A key change is visible: anyone who recorded the fingerprint
+  `SHA256:DFqKPwKi7WOq6aOIBO9yx6LqjhgqC/n29X6v4u8oVsI` earlier, or who still
+  has an older tag verified, will see that new releases are signed by a
+  different key. Keep the fingerprint you verified the first time and
+  compare it on every update.
+- Reading the diff of the script before running a new version, which is
+  short enough to review.
+

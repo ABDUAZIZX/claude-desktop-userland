@@ -85,6 +85,17 @@ for the case where upstream deliberately pulls a release. It never bypasses
 the signature or `Valid-Until`. A first install has nothing to compare
 against.
 
+**This project's releases have one root of trust: the GitHub account.**
+The release signing key, its fingerprint in the README, the tags and the
+release files are all published through the maintainer's GitHub account;
+there is no independent second source for the fingerprint. The signatures
+protect against tampering with release files or the repository by anyone
+who does not hold the private key. They do not protect against a takeover
+of the account: its new owner can register another signing key and publish
+matching fingerprints, tags and signatures. Recording the fingerprint the
+first time and noticing when it changes is the only defence, and a partial
+one. See [TRUST-CHAIN.md](TRUST-CHAIN.md#the-installer-itself-one-root-of-trust).
+
 **Fingerprint pinning is manual.** Key rotation requires a repository update.
 Watch upstream announcements. A hard failure with `fingerprint mismatch!` is
 either a rotation or an attack, and you cannot tell which from the script's
