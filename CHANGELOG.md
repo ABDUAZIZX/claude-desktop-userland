@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.3.0 (2026-11-23)
 
 - `--enable-auto-update` / `--disable-auto-update`: a daily systemd user
   timer runs `--stage`, which verifies the latest version with the full

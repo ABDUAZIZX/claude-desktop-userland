@@ -12,16 +12,16 @@ Tested on Bluefin LTS (see [Compatibility](#compatibility)). The approach is
 meant for immutable systems and works just as well on a mutable distro where
 you simply do not want vendor packages in `/usr`.
 
-Install from the `v1.2.0` tag, not from `main`. Check the script's SHA256,
+Install from the `v1.3.0` tag, not from `main`. Check the script's SHA256,
 then the release signature, before running it:
 
 ```
-curl -fsSLO https://raw.githubusercontent.com/ABDUAZIZX/claude-desktop-userland/v1.2.0/claude-desktop-userland.sh
-echo "f82e7dfe2b2b096ce95fac09fe4dd7835fada94dfedd3832cb77c0c5d7e58e50  claude-desktop-userland.sh" | sha256sum -c -
+curl -fsSLO https://raw.githubusercontent.com/ABDUAZIZX/claude-desktop-userland/v1.3.0/claude-desktop-userland.sh
+echo "64372afe7e636888148bb58cbbe915ec03b1dc40ab2a4694f0e76c761944bef7  claude-desktop-userland.sh" | sha256sum -c -
 
 # release signature: SHA256SUMS signed with the release key (from 1.2.0 on)
-curl -fsSLO https://github.com/ABDUAZIZX/claude-desktop-userland/releases/download/v1.2.0/SHA256SUMS
-curl -fsSLO https://github.com/ABDUAZIZX/claude-desktop-userland/releases/download/v1.2.0/SHA256SUMS.sig
+curl -fsSLO https://github.com/ABDUAZIZX/claude-desktop-userland/releases/download/v1.3.0/SHA256SUMS
+curl -fsSLO https://github.com/ABDUAZIZX/claude-desktop-userland/releases/download/v1.3.0/SHA256SUMS.sig
 curl -fsSL https://api.github.com/users/ABDUAZIZX/ssh_signing_keys \
   | grep -o '"key": *"[^"]*"' | cut -d'"' -f4 > signing_key.pub
 ssh-keygen -lf signing_key.pub   # must be SHA256:DFqKPwKi7WOq6aOIBO9yx6LqjhgqC/n29X6v4u8oVsI
@@ -127,7 +127,7 @@ Output of `./claude-desktop-userland.sh --help`, verbatim:
 
 <!-- usage:begin -->
 ```
-claude-desktop-userland.sh 1.2.0
+claude-desktop-userland.sh 1.3.0
 
 Installs the official Claude Desktop .deb into $HOME on an rpm-ostree /
 bootc system, without dpkg, without layering, without root.
