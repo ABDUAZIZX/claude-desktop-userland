@@ -24,7 +24,10 @@ trap 'rm -rf "$WORK"' EXIT
 
 # Isolate every path the script derives from HOME before sourcing it.
 export HOME="$WORK/home"
-unset XDG_DATA_HOME
+# Every XDG path the script reads must follow HOME: a set XDG_CONFIG_HOME
+# (GitHub runners have one) would send the systemd unit tests into the real
+# ~/.config/systemd/user.
+unset XDG_DATA_HOME XDG_CONFIG_HOME
 mkdir -p "$HOME"
 
 # Preflight requires curl and gpg to exist, but the tests that reach it never
@@ -1099,6 +1102,10 @@ t_auto_update_units() {
     ok "timer unit: daily, persistent"
   else nok "timer unit: daily, persistent" "$tmr"; fi
 
+  local ud
+  ud="$(env HOME="$h" bash -c '. "$1"; printf %s "$UNIT_DIR"' _ "$SCRIPT")"
+  case "$ud" in "$h"/*) ok "unit directory follows the test HOME" ;;
+    *) nok "unit directory follows the test HOME" "$ud"; return 0 ;; esac
   out="$(env HOME="$h" PATH="$sbin:$PATH" bash "$SCRIPT" --enable-auto-update 2>&1)"
   if [ -f "$h/.config/systemd/user/claude-desktop-update.service" ] && [ -f "$h/.config/systemd/user/claude-desktop-update.timer" ] \
      && [ -x "$h/.local/share/claude-desktop/updater/claude-desktop-userland.sh" ] \
