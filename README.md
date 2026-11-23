@@ -94,13 +94,22 @@ against.
 ## Layout on disk
 
 ```
-~/.local/share/claude-desktop/versions/<version>/   application payload
+~/.local/share/claude-desktop/versions/<version>/   application payload (two kept)
 ~/.local/share/claude-desktop/current               symlink to the active version
+~/.local/share/claude-desktop/package-meta/<ver>/   control file, maintainer scripts (never run)
+~/.local/share/claude-desktop/state/                newest verified index Date (rollback floor)
+~/.local/share/claude-desktop/staged/<version>/     auto-update only: verified, not active
+~/.local/share/claude-desktop/updater/              auto-update only: the script the timer runs
+~/.config/systemd/user/claude-desktop-update.*      auto-update only: service and timer
 ~/.local/bin/claude-desktop                         launcher wrapper
 ~/.local/share/applications/claude-desktop.desktop  menu entry
 ~/.local/share/icons/hicolor/...                    icons
 ~/.config/Claude/                                   created by the app itself
 ```
+
+`staged/` is deliberately separate from `versions/`: `--rollback` and the
+two-version retention only look at `versions/`, so a staged version is never
+switched to or counted until you run `--activate-staged`.
 
 Nothing is written outside `$HOME`. Uninstalling is `rm -rf` of the paths above,
 which is exactly what `--uninstall` does.

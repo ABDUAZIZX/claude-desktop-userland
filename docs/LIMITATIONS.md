@@ -50,10 +50,20 @@ versions and notifies you, while switching stays a manual
 that would install unattended and change what is launched without review.
 
 **Auto-update limits.**
-- The timer runs a copy of the installer made by `--enable-auto-update`
-  (`~/.local/share/claude-desktop/updater/`). That copy is never updated by
-  the timer; fixes to the installer reach it only when you run a newer
-  release with `--enable-auto-update` again.
+- **The updater copy is frozen.** The timer runs a copy of the installer
+  made by `--enable-auto-update`
+  (`~/.local/share/claude-desktop/updater/claude-desktop-userland.sh`). The
+  timer never updates it, so it keeps the trust-chain code, the pinned key
+  fingerprint and the checks of the release you enabled it with. Fixes and
+  new checks in later releases reach the timer only when you run the newer
+  release with `--enable-auto-update` again. Compare
+  `~/.local/share/claude-desktop/updater/claude-desktop-userland.sh --version`
+  with the latest release now and then. Updating the copy automatically
+  would mean the timer replacing the code that verifies updates, which is
+  the one thing it must not do unattended.
+- Staged versions live in `~/.local/share/claude-desktop/staged/`, not
+  `versions/`, so `--rollback` and the two-version retention never touch
+  them.
 - A staged version sits in `~/.local/share/claude-desktop/staged/` between
   verification and activation. It was verified when staged, not again when
   activated; anything that can write to your home directory could alter it
