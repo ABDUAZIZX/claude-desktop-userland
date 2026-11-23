@@ -17,6 +17,23 @@ only**.
   user. A timer never changes what is launched.
 - `--disable-auto-update` removes the units.
 
+## `--rollback` (for 1.2.0)
+
+Two versions are kept under `versions/` precisely so an update can be undone,
+but switching back today means re-pointing the `current` link by hand.
+
+- `--rollback` points `current` at the other retained version, offline: no
+  download, no index fetch, so the `Date` floor and the downgrade check are
+  untouched (they guard what the repository serves, not a local switch the
+  user asks for).
+- Refuses when there is no second version, when its directory is incomplete
+  (main binary missing), or when its version string is not `N(.N)*`.
+- Prints both versions and runs the host check on the version switched to,
+  like after an install, including a `host-check-skipped` record of that
+  version.
+- The next plain install still moves forward to the newest version in the
+  repository; `--rollback` does not pin anything.
+
 ## Signed release artifacts
 
 Every release carries a signature that does not come from the same place as
