@@ -17,15 +17,6 @@ only**.
   user. A timer never changes what is launched.
 - `--disable-auto-update` removes the units.
 
-## Signed release artifacts: install snippet
-
-Releases from 1.2.0 on carry `SHA256SUMS` and `SHA256SUMS.sig`, signed with
-the tag key and verified as documented in RELEASING.md and the README
-section "Verify a release signature". The README install snippet still
-checks the script against the hash in the README only, because the release it
-pins (1.1.0) has no signature. Once 1.2.0 is released, the snippet gains the
-signature check before `sha256sum -c`.
-
 ## Keep the weekly `distros` run alive
 
 GitHub disables scheduled workflows in a public repository after 60 days
