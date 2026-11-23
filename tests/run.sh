@@ -728,7 +728,7 @@ t_skip_record_timing() {
 }
 
 # Test groups register themselves here.
-TESTS=(t_sourcing t_apparmor t_libs t_extract t_release_dates t_downgrade t_date_floor t_skip_record t_readme t_version_format t_date_floor_modes t_changelog t_skip_record_timing t_readme_git)
+TESTS=(t_sourcing t_apparmor t_libs t_extract t_release_dates t_downgrade t_date_floor t_skip_record t_readme t_version_format t_date_floor_modes t_changelog t_skip_record_timing t_readme_git t_payload_verdict)
 
 t_readme_git() {
   if ! command -v git >/dev/null 2>&1; then
@@ -754,6 +754,33 @@ t_readme_git() {
   out="$(PATH="$WORK/empty-path" released_script_ref "$d/plain" v9.9.9 2>&1)"; rc=$?
   if [ "$rc" = 2 ]; then ok "missing git is an error, not a fall back"
   else nok "missing git is an error, not a fall back" "rc=$rc out=$out"; fi
+}
+
+# payload-verdict.sh, the distros workflow's judgement of a live install.
+t_payload_verdict() {
+  local d="$WORK/verdict" v="$HERE/payload-verdict.sh" aa
+  mkdir -p "$d"
+  printf '1\n' >"$d/sysctl"
+  aa="$( (HOST_FAIL=0; check_userns "$d/sysctl" "$d/no-profile") 2>&1 )"
+  { printf '%s\n' "$aa"; c_warn "Claude Desktop 1.0 installed, but the problems marked [fail] above will stop it from running"; } >"$d/aa.log" 2>&1
+  { cat "$d/aa.log"; h_fail "missing shared libraries:"; } >"$d/aa-libs.log" 2>&1
+  c_ok "all good" >"$d/clean.log" 2>&1
+  die_msg() { c_err "$1"; }
+  die_msg "could not download signing key" >"$d/net.log" 2>&1
+  die_msg "repository index failed the freshness check" >"$d/stale.log" 2>&1
+  die_msg "InRelease signature verification FAILED" >"$d/sig.log" 2>&1
+
+  expect_rc 0 "verdict: only the AppArmor [fail] with rc=1 is accepted" bash "$v" "$d/aa.log" 1 installed
+  expect_rc 1 "verdict: AppArmor plus a library [fail] is rejected" bash "$v" "$d/aa-libs.log" 1 installed
+  expect_rc 1 "verdict: rc=1 without any [fail] line is rejected" bash "$v" "$d/clean.log" 1 installed
+  expect_rc 1 "verdict: rc other than 1 is rejected" bash "$v" "$d/aa.log" 2 installed
+  expect_rc 0 "verdict: rc=0 with a clean host check is accepted" bash "$v" "$d/clean.log" 0 installed
+  expect_rc 1 "verdict: rc=0 with a [fail] line is rejected" bash "$v" "$d/aa.log" 0 installed
+  expect_rc 3 "verdict: unreachable repository is reported as such" bash "$v" "$d/net.log" 1 missing
+  expect_rc 3 "verdict: stale index is reported as such" bash "$v" "$d/stale.log" 1 missing
+  expect_rc 1 "verdict: a signature failure is an install failure" bash "$v" "$d/sig.log" 1 missing
+  expect_out 'Live repository unavailable.*not a defect in the code' "verdict: the annotation says it is not a code defect" \
+    bash "$v" "$d/net.log" 1 missing
 }
 
 for t in "${TESTS[@]}"; do "$t"; done

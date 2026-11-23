@@ -45,17 +45,10 @@ jobs:
           rc="${PIPESTATUS[0]}"
           set -e
           cur="$HOME/.local/share/claude-desktop/current"
-          if [ ! -L "$cur" ]; then
-            # Failures of the live repository are not defects in this code.
-            if grep -qE 'could not download|download failed|failed the freshness check' "$log"; then
-              echo "::error title=Live repository unavailable::downloads.claude.ai could not be reached or served an expired / future-dated index (Valid-Until / Date). This is not a defect in the code; re-run the workflow later."
-            else
-              echo "::error title=Install failed::the installer stopped before completing (rc=$rc); see the log above."
-            fi
-            exit 1
-          fi
-          # The final host check may fail on this runner (AppArmor restriction,
-          # libraries absent); the install itself has completed.
+          state=missing; [ -L "$cur" ] && state=installed
+          # rc=1 is accepted only when the single [fail] line is the AppArmor
+          # restriction (covered by the sandbox job); see the script.
+          bash tests/payload-verdict.sh "$log" "$rc" "$state"
           ver="$(basename "$(readlink -f "$cur")")"
           echo "installed $ver (installer rc=$rc)"
           echo "version=$ver" >> "$GITHUB_OUTPUT"
