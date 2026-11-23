@@ -78,7 +78,15 @@ AA_PROFILE_FILE="/etc/apparmor.d/$AA_PROFILE_NAME"
 AA_SYSCTL="/proc/sys/kernel/apparmor_restrict_unprivileged_userns"
 
 HOST_FAIL=0
-h_fail() { c_err "$*"; HOST_FAIL=1; }
+# h_fail ID MESSAGE -- a host-check failure. ID is a fixed marker printed as
+# "[fail:ID]" so tools (CI, scripts) can tell failures apart without parsing
+# the prose, which may be reworded. IDs are listed in the README; keep them
+# stable and lower-case ([a-z0-9-]).
+h_fail() {
+  local id="$1"; shift
+  printf '\033[31m[fail:%s]\033[0m %s\n' "$id" "$*" >&2
+  HOST_FAIL=1
+}
 
 # deb | rpm | arch | suse | unknown -- only used to phrase install hints
 os_family() {
@@ -119,7 +127,7 @@ check_libc() {
   v="${v##* }"
   GLIBC_SEEN="$v"
   if [ -z "$v" ]; then
-    h_fail "glibc not found (musl-based system?); the upstream build needs glibc >= $MIN_GLIBC"
+    h_fail glibc-missing "glibc not found (musl-based system?); the upstream build needs glibc >= $MIN_GLIBC"
     c_info "  use a glibc distrobox/toolbox container instead"
     return 0
   fi
@@ -131,7 +139,7 @@ check_libc() {
       c_warn "glibc $v is older than the required $MIN_GLIBC; continuing because of --skip-host-check"
       c_warn "  the app will most likely fail to start on this host"
     else
-      h_fail "glibc $v is older than the required $MIN_GLIBC (e.g. Debian 11, RHEL/Alma/Rocky 8)"
+      h_fail glibc-too-old "glibc $v is older than the required $MIN_GLIBC (e.g. Debian 11, RHEL/Alma/Rocky 8)"
       c_info "  use a newer distribution, or a distrobox/toolbox container with glibc >= $MIN_GLIBC"
     fi
   fi
@@ -168,7 +176,7 @@ check_host_check_record() {
   rec="$meta/$ver/$SKIP_RECORD_NAME"
   [ -f "$rec" ] || return 0
   glibc="$(sed -n 's/^glibc=//p' "$rec")"
-  h_fail "glibc check: $ver was installed with --skip-host-check (glibc ${glibc:-unknown} at install time, required $MIN_GLIBC)"
+  h_fail glibc-check-skipped "glibc check: $ver was installed with --skip-host-check (glibc ${glibc:-unknown} at install time, required $MIN_GLIBC)"
   c_info "  record: $rec"
   if [ "$(sed -n 's/^floor_violated=//p' "$rec")" = 1 ]; then
     c_info "  once glibc >= $MIN_GLIBC, reinstall without the option (--force) to clear it"
@@ -262,12 +270,12 @@ HOWTO
 check_userns() {
   local aa_sysctl="${1:-$AA_SYSCTL}" aa_profile="${2:-$AA_PROFILE_FILE}"
   if [ "$(cat /proc/sys/user/max_user_namespaces 2>/dev/null || echo 0)" -lt 1 ]; then
-    h_fail "user namespaces disabled (user.max_user_namespaces=0): the renderer sandbox cannot start"
+    h_fail userns-disabled "user namespaces disabled (user.max_user_namespaces=0): the renderer sandbox cannot start"
     return 0
   fi
   # Older Debian kernels carry their own switch
   if [ "$(cat /proc/sys/kernel/unprivileged_userns_clone 2>/dev/null || echo 1)" = "0" ]; then
-    h_fail "kernel.unprivileged_userns_clone=0: the renderer sandbox cannot start"
+    h_fail userns-clone-disabled "kernel.unprivileged_userns_clone=0: the renderer sandbox cannot start"
     c_info "  enable it with: sudo sysctl -w kernel.unprivileged_userns_clone=1 (persist in /etc/sysctl.d/)"
     return 0
   fi
@@ -275,7 +283,7 @@ check_userns() {
     if aa_profile_present "$aa_profile"; then
       c_ok "AppArmor restricts user namespaces; profile $aa_profile present (load state needs root to verify)"
     else
-      h_fail "AppArmor restricts unprivileged user namespaces (Ubuntu 24.04+): the renderer sandbox cannot start"
+      h_fail apparmor-userns "AppArmor restricts unprivileged user namespaces (Ubuntu 24.04+): the renderer sandbox cannot start"
       aa_remedies
     fi
     return 0
@@ -456,7 +464,7 @@ check_libs() {
     return 0
   fi
 
-  h_fail "missing shared libraries:"
+  h_fail missing-libs "missing shared libraries:"
   printf '    %s\n' $missing >&2
   fam="$(os_family)"
   case "$fam" in deb) col=1 ;; rpm) col=2 ;; arch) col=3 ;; suse) col=4 ;; *) col=0 ;; esac
@@ -807,7 +815,7 @@ run_doctor() {
     c_ok "host looks able to run Claude Desktop"
     return 0
   fi
-  c_err "blocking problems found (see [fail] lines above)"
+  c_err "blocking problems found (see [fail:...] lines above)"
   return 1
 }
 
@@ -1287,7 +1295,7 @@ c_info "host check"
 run_host_checks
 echo
 if [ "$HOST_FAIL" != 0 ]; then
-  c_warn "Claude Desktop $VER installed, but the problems marked [fail] above will stop it from running"
+  c_warn "Claude Desktop $VER installed, but the problems marked [fail:...] above will stop it from running"
   c_info "re-run with --doctor after fixing them"
   return 1
 fi

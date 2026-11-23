@@ -12,6 +12,10 @@
   before any download. A direct Ubuntu 24.04 job checks the AppArmor userns
   restriction: no sandboxed renderer without the generated profile, a
   renderer in its own user namespace with it
+- Host-check failures carry a fixed marker, `[fail:<id>]` (for example
+  `[fail:apparmor-userns]`, `[fail:missing-libs]`), listed in the README.
+  Scripts and CI match the marker instead of the wording; tests keep the
+  README list, the call sites and the CI verdict in step
 - CI: every action is pinned to a commit SHA, and both workflows run with a
   read-only token (`contents: read`)
 

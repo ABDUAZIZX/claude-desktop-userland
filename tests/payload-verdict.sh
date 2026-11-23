@@ -13,9 +13,11 @@
 #
 # On a GitHub ubuntu-24.04 runner the final host check fails for exactly one
 # reason: AppArmor restricts unprivileged user namespaces and no profile is
-# loaded (the sandbox job covers that). So rc=1 is accepted only when that is
-# the single [fail] line; any other [fail] (a missing library, glibc, ...)
-# fails the job.
+# loaded (the sandbox job covers that). So rc=1 is accepted only when the
+# single failure line is the installer's fixed marker [fail:apparmor-userns];
+# any other marker (missing-libs, glibc-*, ...) or an unmarked [fail] line
+# from die() fails the job. The marker, not the message text, is matched, so
+# rewording the message does not break this verdict.
 
 set -euo pipefail
 
@@ -24,11 +26,12 @@ rc="${2:?usage: payload-verdict.sh LOG RC installed|missing}"
 state="${3:?usage: payload-verdict.sh LOG RC installed|missing}"
 [ -r "$log" ] || { echo "::error title=Install failed::installer log $log not readable"; exit 1; }
 
-AA_FAIL='[fail] AppArmor restricts unprivileged user namespaces (Ubuntu 24.04+): the renderer sandbox cannot start'
+EXPECTED='apparmor-userns'
 
 clean="$(sed 's/\x1b\[[0-9;]*m//g' "$log")"
-# only lines that start with [fail]: the closing [warn] mentions "[fail]" too
-fails="$(grep -E '^\[fail\] ' <<<"$clean" || true)"
+# Failure lines start with "[fail:<id>] " (host checks) or "[fail] " (die).
+# Only line starts count: the closing [warn] line mentions "[fail:...]" too.
+fails="$(grep -E '^\[fail(:[a-z0-9-]+)?\] ' <<<"$clean" || true)"
 
 if [ "$state" != installed ]; then
   if grep -qE 'could not download|download failed|failed the freshness check' <<<"$clean"; then
@@ -49,11 +52,12 @@ if [ "$rc" = 0 ]; then
   exit 0
 fi
 
-if [ "$rc" = 1 ] && [ "$fails" = "$AA_FAIL" ]; then
+if [ "$rc" = 1 ] && [ -n "$fails" ] && [ "$(wc -l <<<"$fails")" = 1 ] \
+   && [ "${fails%%]*}]" = "[fail:$EXPECTED]" ]; then
   echo "accepted: install completed; the only host-check failure is the expected AppArmor restriction"
   exit 0
 fi
 
-echo "::error title=Host check failed::rc=$rc; only the AppArmor userns restriction is expected on this runner, found:"
+echo "::error title=Host check failed::rc=$rc; only [fail:$EXPECTED] is expected on this runner, found:"
 printf '%s\n' "${fails:-(no [fail] lines)}"
 exit 1
