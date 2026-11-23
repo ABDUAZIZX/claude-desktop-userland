@@ -27,7 +27,7 @@ jobs:
   # repository (full trust chain) on the runner. The resulting install
   # (versions, current, package-meta, launcher) is packed with tar, which keeps
   # the executable bits that upload-artifact would drop, and is reused by the
-  # container jobs.
+  # container and sandbox jobs.
   payload:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -130,3 +130,57 @@ jobs:
           IMAGE: ${{ matrix.image }}
           EXPECT: ${{ matrix.expect }}
         run: CONTAINER_ENGINE=docker bash tests/distro-run.sh refused "$IMAGE" "$EXPECT"
+
+  # The only job that exercises the Ubuntu 24.04+ AppArmor userns restriction
+  # and the profile from --print-apparmor-profile: a direct run on the runner,
+  # no container, as the runner's unprivileged user.
+  sandbox:
+    needs: payload
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: install
+          path: ${{ runner.temp }}
+
+      - name: Restore the install from the payload job
+        # Same runner image, same $HOME, so the absolute "current" link holds.
+        run: |
+          tar -C "$HOME" -xf "$RUNNER_TEMP/install.tar"
+          [ -d "$(readlink -f "$HOME/.local/share/claude-desktop/current")" ] \
+            || { echo "::error::restored install is broken: current does not resolve"; exit 1; }
+
+      - name: Enforce the Ubuntu desktop default
+        # Runner images may relax the restriction; the test needs it on.
+        run: |
+          echo "restriction was: $(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)"
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=1
+
+      - name: Libraries and display
+        # Same round trip as the containers: the installer's suggestions must
+        # be enough. xvfb and dbus provide the display and session bus.
+        run: |
+          sudo apt-get update
+          sudo bash tests/distro-check.sh libs "$(readlink -f "$HOME/.local/share/claude-desktop/current")"
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xvfb xauth dbus
+
+      - name: Sandbox with and without the profile
+        env:
+          SANDBOX_LOG_DIR: ${{ runner.temp }}/sandbox-logs
+        run: bash tests/sandbox-check.sh
+
+      - name: Collect AppArmor messages
+        if: failure()
+        run: |
+          mkdir -p "$RUNNER_TEMP/sandbox-logs"
+          sudo dmesg | grep -i apparmor > "$RUNNER_TEMP/sandbox-logs/dmesg-apparmor.txt" || true
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: failure()
+        with:
+          name: sandbox-logs
+          path: ${{ runner.temp }}/sandbox-logs
+          retention-days: 7

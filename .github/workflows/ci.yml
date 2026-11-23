@@ -31,7 +31,7 @@ jobs:
         run: |
           shellcheck -S warning -s bash claude-desktop-userland.sh
           shellcheck -S warning -x tests/run.sh
-          shellcheck -S warning tests/distro-check.sh tests/distro-run.sh
+          shellcheck -S warning tests/distro-check.sh tests/distro-run.sh tests/sandbox-check.sh
           shellcheck -S warning -s sh tests/distro-setup.sh
 
       - name: Unit tests
