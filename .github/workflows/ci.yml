@@ -1,4 +1,4 @@
-name: shellcheck
+name: ci
 
 on:
   push:
@@ -11,6 +11,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # the README hash test compares against the released tag
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: Install tools
         # libarchive-tools provides bsdtar, so the bsdtar extraction path is

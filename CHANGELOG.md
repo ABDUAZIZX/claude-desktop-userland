@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- The `host-check-skipped` record is written only after the payload is
+  installed, so a run that fails later leaves no record behind
+
 ## 1.1.0 (2026-11-22)
 
 - `--inspect`: download and verify the latest package, print its

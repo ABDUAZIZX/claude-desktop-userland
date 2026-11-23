@@ -58,23 +58,3 @@ tested:
   distribution.
 - **"Works"** only when the application was actually launched and the sandbox
   confirmed on that distribution.
-
-## Small follow-ups
-
-- **Write the `host-check-skipped` record after a successful install.**
-  Today it is written in `step_extract_package`, before the payload is
-  extracted and installed, so a later failure leaves it behind. For a new
-  version this is an orphan that `--doctor` ignores (it only reads the record
-  of the version `current` points at). For `--force --skip-host-check` on the
-  installed version, a failed run leaves the working install reported as a
-  glibc failure until the next successful plain install. Moving the write to
-  after `step_install_payload` removes both cases.
-- **Rename the workflow to `ci`.** `.github/workflows/shellcheck.yml` (job
-  `lint`) now runs syntax checks, shellcheck and the unit tests; the name
-  should say so. Branch protection rules that reference the check name must
-  be updated in the same change.
-- **Update the script header comment.** The block at the top of
-  `claude-desktop-userland.sh` still describes an rpm-ostree / bootc-only
-  installer and lists only the original options. It should match the current
-  scope (any glibc >= 2.34 distribution, host checks) and point to `--help`
-  for the option list instead of duplicating it.
