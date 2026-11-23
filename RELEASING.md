@@ -31,13 +31,18 @@ sha256sum claude-desktop-userland.sh
 Put the value into the `echo "<sha256>  claude-desktop-userland.sh" | sha256sum -c -`
 line of the README install snippet.
 
-## 3. Update the link
+## 3. Update the links
 
-In the same snippet, point the `curl` URL at the new tag:
+In the same snippet, point every URL at the new tag: the raw script URL and
+both release-asset URLs (`SHA256SUMS`, `SHA256SUMS.sig`).
 
 ```
 https://raw.githubusercontent.com/ABDUAZIZX/claude-desktop-userland/vX.Y.Z/claude-desktop-userland.sh
+https://github.com/ABDUAZIZX/claude-desktop-userland/releases/download/vX.Y.Z/SHA256SUMS
+https://github.com/ABDUAZIZX/claude-desktop-userland/releases/download/vX.Y.Z/SHA256SUMS.sig
 ```
+
+The release-asset URLs return 404 until step 8 publishes them.
 
 ## 4. Run the checks
 
@@ -50,7 +55,7 @@ bash tests/run.sh
 
 All must pass. `tests/run.sh` fails if the README usage block differs from
 `--help`, if the README hash differs from the script (the working copy while
-tag `v$SELF_VERSION` does not exist yet, the tagged file afterwards), if the README URL does
+tag `v$SELF_VERSION` does not exist yet, the tagged file afterwards), if a README URL does
 not point at `v$SELF_VERSION`, or if `CHANGELOG.md` has no
 `## $SELF_VERSION (YYYY-MM-DD)` heading with a real date, so steps 1 to 3 are
 checked here.

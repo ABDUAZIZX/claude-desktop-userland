@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.2.0 (2026-11-23)
 
 - `--rollback`: switch `current` back to the other kept version, offline.
   The Date floor and the downgrade check are not involved; a version that

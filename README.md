@@ -12,22 +12,35 @@ Tested on Bluefin LTS (see [Compatibility](#compatibility)). The approach is
 meant for immutable systems and works just as well on a mutable distro where
 you simply do not want vendor packages in `/usr`.
 
-Install from the `v1.1.0` tag, not from `main`, and check the script's SHA256
-before running it:
+Install from the `v1.2.0` tag, not from `main`. Check the script's SHA256,
+then the release signature, before running it:
 
 ```
-curl -fsSLO https://raw.githubusercontent.com/ABDUAZIZX/claude-desktop-userland/v1.1.0/claude-desktop-userland.sh
-echo "cf0746f0cde1306c02497776211522a64d487c9bea40e8dc71954b63cd42c57e  claude-desktop-userland.sh" | sha256sum -c -
+curl -fsSLO https://raw.githubusercontent.com/ABDUAZIZX/claude-desktop-userland/v1.2.0/claude-desktop-userland.sh
+echo "f82e7dfe2b2b096ce95fac09fe4dd7835fada94dfedd3832cb77c0c5d7e58e50  claude-desktop-userland.sh" | sha256sum -c -
+
+# release signature: SHA256SUMS signed with the release key (from 1.2.0 on)
+curl -fsSLO https://github.com/ABDUAZIZX/claude-desktop-userland/releases/download/v1.2.0/SHA256SUMS
+curl -fsSLO https://github.com/ABDUAZIZX/claude-desktop-userland/releases/download/v1.2.0/SHA256SUMS.sig
+curl -fsSL https://api.github.com/users/ABDUAZIZX/ssh_signing_keys \
+  | grep -o '"key": *"[^"]*"' | cut -d'"' -f4 > signing_key.pub
+ssh-keygen -lf signing_key.pub   # must be SHA256:DFqKPwKi7WOq6aOIBO9yx6LqjhgqC/n29X6v4u8oVsI
+sed 's/^/release namespaces="file" /' signing_key.pub > allowed_signers
+ssh-keygen -Y verify -f allowed_signers -I release -n file -s SHA256SUMS.sig < SHA256SUMS
+sha256sum -c SHA256SUMS
+
 chmod +x claude-desktop-userland.sh
 ./claude-desktop-userland.sh --doctor   # optional: host check, offline
 ./claude-desktop-userland.sh
 ```
 
-`sha256sum -c` must print `claude-desktop-userland.sh: OK`; anything else means
-the file is not the tagged release, so do not run it. The hash and the script
-come from the same repository, so this guards against a corrupted or
-substituted download and pins you to the reviewed release; it is not a second,
-independent signature.
+Both `sha256sum -c` lines must print `claude-desktop-userland.sh: OK`, and
+`ssh-keygen -Y verify` must print `Good "file" signature`; anything else
+means the file is not the signed release, so do not run it. The first check
+pins the hash written in this README; the second proves the release was
+signed with the maintainer's key. Both trace back to the same GitHub account,
+so neither protects against a takeover of that account (see
+[Verify a release signature](#verify-a-release-signature)).
 
 No pipe-to-shell one-liner is offered on purpose. Read the script first.
 
@@ -105,7 +118,7 @@ Output of `./claude-desktop-userland.sh --help`, verbatim:
 
 <!-- usage:begin -->
 ```
-claude-desktop-userland.sh 1.1.0
+claude-desktop-userland.sh 1.2.0
 
 Installs the official Claude Desktop .deb into $HOME on an rpm-ostree /
 bootc system, without dpkg, without layering, without root.

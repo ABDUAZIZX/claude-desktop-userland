@@ -46,7 +46,7 @@ KEY_URL="https://downloads.claude.ai/claude-desktop/key.asc"
 REPO_BASE="https://downloads.claude.ai/claude-desktop/apt/stable"
 KEY_FPR="31DDDE24DDFAB679F42D7BD2BAA929FF1A7ECACE"
 PKG_NAME="claude-desktop"
-SELF_VERSION="1.1.0"
+SELF_VERSION="1.2.0"
 
 BASE="${XDG_DATA_HOME:-$HOME/.local/share}/claude-desktop"
 VERSIONS="$BASE/versions"

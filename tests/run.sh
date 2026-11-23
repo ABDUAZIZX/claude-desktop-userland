@@ -514,6 +514,15 @@ t_readme() {
   else
     nok "README install URL points at tag v$SELF_VERSION"
   fi
+
+  # the snippet's signature step downloads release assets of the same version
+  local dl
+  dl="$(grep -oE 'releases/download/v[0-9][0-9.]*/[A-Za-z0-9._-]+' "$readme" | sort -u | tr '\n' ' ')"
+  if [ "$dl" = "releases/download/v$SELF_VERSION/SHA256SUMS releases/download/v$SELF_VERSION/SHA256SUMS.sig " ]; then
+    ok "README signature step downloads SHA256SUMS and .sig of v$SELF_VERSION"
+  else
+    nok "README signature step downloads SHA256SUMS and .sig of v$SELF_VERSION" "found: ${dl:-none}"
+  fi
 }
 
 # --- repository version format -------------------------------------------------
