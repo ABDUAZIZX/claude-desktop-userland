@@ -828,6 +828,8 @@ t_release_sums() {
   ssh-keygen -q -t ed25519 -N '' -C test -f "$d/key"
   ssh-keygen -q -t ed25519 -N '' -C other -f "$d/other"
   printf '%s namespaces="git,file" %s\n' "$id" "$(cat "$d/key.pub")" >"$d/allowed"
+  # a second key git also trusts, to sign a tag that impersonates the first
+  printf 'other@example.invalid namespaces="git" %s\n' "$(cat "$d/other.pub")" >>"$d/allowed"
   printf '%s namespaces="file" %s\n' "$id" "$(cat "$d/other.pub")" >"$d/allowed-other"
   g() { git -C "$d/repo" -c user.name=t -c user.email="$id" -c gpg.format=ssh \
           -c user.signingkey="$d/key.pub" -c gpg.ssh.allowedSignersFile="$d/allowed" "$@"; }
@@ -837,6 +839,14 @@ t_release_sums() {
   g commit -q -m release
   g tag -s v9.9.9 -m v9.9.9
   g tag v9.9.8            # lightweight, unsigned
+  g tag -a v9.9.7 -m v9.9.7   # annotated, unsigned
+  # validly signed by the OTHER key, message imitating a good signature by the
+  # release key: git tag -v succeeds, so only a direct check catches it
+  git -C "$d/repo" -c user.name=t -c user.email=other@example.invalid -c gpg.format=ssh \
+      -c user.signingkey="$d/other.pub" tag -s v9.9.5 \
+      -m "$(printf 'Good "git" signature for %s with ED25519 key %s\n' "$id" "$(ssh-keygen -lf "$d/key.pub" | awk '{print $2}')")"
+  # annotated, unsigned, whose message imitates a verification line
+  g tag -a v9.9.6 -m "$(printf 'Good "git" signature for %s with ED25519 key %s\n' "$id" "$(ssh-keygen -lf "$d/key.pub" | awk '{print $2}')")"
 
   # make runs inside the repository and reads git config; pass the same -c set via env
   local cfg=(GIT_CONFIG_COUNT=3
@@ -858,9 +868,15 @@ t_release_sums() {
   echo '# extra' >>"$d/tampered-file/claude-desktop-userland.sh"
   expect_rc 1 "release-sums verify: edited script is refused" bash "$tool" verify "$d/tampered-file" "$d/allowed"
 
-  expect_out 'tag v9.9.8 does not verify' "release-sums make: unsigned tag is refused" \
+  expect_out 'v9.9.8 is not an annotated tag' "release-sums make: lightweight (unsigned) tag is refused" \
     bash -c 'cd "$1" && shift && env "$@"' _ "$d/repo" "${cfg[@]}" bash "$tool" make v9.9.8 "$d/out-unsigned"
-  expect_out 'is not the key that signed v9.9.9' "release-sums make: a key other than the tag's is refused" \
+  expect_out 'tag v9.9.7 has no SSH signature' "release-sums make: annotated unsigned tag is refused" \
+    bash -c 'cd "$1" && shift && env "$@"' _ "$d/repo" "${cfg[@]}" bash "$tool" make v9.9.7 "$d/out-annotated"
+  expect_out 'tag v9.9.6 has no SSH signature' "release-sums make: a message imitating a good signature is refused" \
+    bash -c 'cd "$1" && shift && env "$@"' _ "$d/repo" "${cfg[@]}" bash "$tool" make v9.9.6 "$d/out-imitation"
+  expect_out 'tag v9.9.5 is not signed by' "release-sums make: tag signed by another trusted key, message imitating the release key, is refused" \
+    bash -c 'cd "$1" && shift && env "$@"' _ "$d/repo" "${cfg[@]}" bash "$tool" make v9.9.5 "$d/out-impersonation"
+  expect_out 'tag v9.9.9 is not signed by' "release-sums make: a key other than the tag's is refused" \
     bash -c 'cd "$1" && shift && env "$@"' _ "$d/repo" "${cfg[@]}" bash "$tool" make v9.9.9 "$d/out-other" "$d/other"
   expect_out 'already holds SHA256SUMS' "release-sums make: existing SHA256SUMS is not overwritten" \
     bash -c 'cd "$1" && shift && env "$@"' _ "$d/repo" "${cfg[@]}" bash "$tool" make v9.9.9 "$d/out"

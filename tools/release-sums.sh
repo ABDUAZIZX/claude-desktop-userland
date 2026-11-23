@@ -8,8 +8,10 @@
 #         claude-desktop-userland.sh   the script as released at TAG
 #         SHA256SUMS                   "<sha256>  claude-desktop-userland.sh"
 #         SHA256SUMS.sig               detached SSH signature, namespace "file"
-#       SIGNING-KEY defaults to git's user.signingkey. It must be the key that
-#       signed TAG; any other key is refused.
+#       SIGNING-KEY defaults to git's user.signingkey (an SSH key file). TAG
+#       must be an annotated tag whose signature verifies with exactly that key
+#       (checked with ssh-keygen, not by parsing git output); otherwise
+#       nothing is written.
 #   bash tools/release-sums.sh verify DIR ALLOWED-SIGNERS
 #       Checks SHA256SUMS.sig against ALLOWED-SIGNERS (namespace "file"), then
 #       the files listed in SHA256SUMS. Both must pass.
@@ -30,17 +32,10 @@ key_fpr() { ssh-keygen -lf "$1" 2>/dev/null | awk '{print $2}'; }
 mode_make() {
   local tag="${1:?usage: release-sums.sh make TAG OUTDIR [SIGNING-KEY]}"
   local out="${2:?usage: release-sums.sh make TAG OUTDIR [SIGNING-KEY]}"
-  local key="${3:-}" tag_out tag_fpr priv key_fpr_v
+  local key="${3:-}" tag_fpr priv work
   need git; need ssh-keygen; need sha256sum
 
-  [ "$(git config --get gpg.format || true)" = ssh ] \
-    || die "gpg.format is not ssh; tags and checksums are signed with an SSH key"
   git rev-parse -q --verify "refs/tags/$tag" >/dev/null || die "no such tag: $tag"
-
-  # The tag must verify; its key is the only one allowed to sign the sums.
-  tag_out="$(git tag -v "$tag" 2>&1)" || { printf '%s\n' "$tag_out" >&2; die "tag $tag does not verify"; }
-  tag_fpr="$(sed -nE 's/^Good "git" signature .* with [A-Z0-9-]+ key (SHA256:[A-Za-z0-9+\/=]+).*/\1/p' <<<"$tag_out" | head -n1)"
-  [ -n "$tag_fpr" ] || die "could not read the signing key of $tag from git tag -v"
 
   [ -n "$key" ] || key="$(git config --get user.signingkey || true)"
   [ -n "$key" ] || die "no signing key: pass one, or set git's user.signingkey"
@@ -48,9 +43,26 @@ mode_make() {
   # ssh-keygen -Y sign needs the private half (or an agent holding it)
   priv="${key%.pub}"
   [ -f "$priv" ] || die "private key $priv not found"
-  key_fpr_v="$(key_fpr "$priv")"
-  [ "$key_fpr_v" = "$tag_fpr" ] \
-    || die "signing key $key_fpr_v is not the key that signed $tag ($tag_fpr)"
+
+  # The tag must carry a signature by exactly this key. It is checked directly
+  # with ssh-keygen against an allowed_signers holding only this key, instead
+  # of reading "git tag -v" output, whose stdout carries the tag message and
+  # could imitate a verification line.
+  work="$(mktemp -d)"
+  trap 'rm -rf "$work"' RETURN
+  git cat-file tag "$tag" >"$work/tag" 2>/dev/null \
+    || die "tag $tag is not an annotated tag, so it carries no signature"
+  grep -qx -- '-----BEGIN SSH SIGNATURE-----' "$work/tag" \
+    || die "tag $tag has no SSH signature"
+  sed -n '/^-----BEGIN SSH SIGNATURE-----$/,$p' "$work/tag" >"$work/tag.sig"
+  sed '/^-----BEGIN SSH SIGNATURE-----$/,$d' "$work/tag" >"$work/tag.payload"
+  ssh-keygen -y -f "$priv" >"$work/key.pub" 2>/dev/null \
+    || die "cannot derive the public key from $priv"
+  printf 'signer namespaces="git" %s\n' "$(cat "$work/key.pub")" >"$work/allowed"
+  ssh-keygen -Y verify -f "$work/allowed" -I signer -n git \
+      -s "$work/tag.sig" <"$work/tag.payload" >/dev/null 2>&1 \
+    || die "tag $tag is not signed by $(key_fpr "$priv"); sign the sums with the key that signed the tag"
+  tag_fpr="$(key_fpr "$priv")"
 
   mkdir -p "$out"
   [ ! -e "$out/SHA256SUMS" ] && [ ! -e "$out/SHA256SUMS.sig" ] \
