@@ -328,14 +328,23 @@ before changing anything.
 
 From 1.2.0 on, every GitHub Release carries `SHA256SUMS` (the SHA256 of
 `claude-desktop-userland.sh`) and `SHA256SUMS.sig`, a detached SSH signature
-over it made with the same key that signs the release tags. The README hash
-above comes from the same repository as the script; this signature does not.
+over it made with the same key that signs the release tags.
 
-The public key is published on the maintainer's GitHub account, outside this
-repository, at
+The public key is published on the maintainer's GitHub account at
 [`api.github.com/users/ABDUAZIZX/ssh_signing_keys`](https://api.github.com/users/ABDUAZIZX/ssh_signing_keys).
 Its fingerprint is
 `SHA256:DFqKPwKi7WOq6aOIBO9yx6LqjhgqC/n29X6v4u8oVsI`.
+
+**What this proves, and what it does not.** The only root of trust is that
+GitHub account: the key, this fingerprint, the tags and the release files
+are all published through it, and there is no independent second source.
+The signature protects against tampering with the release files or the
+repository by anyone without the private key, which is not stored on
+GitHub. It does **not** protect against a compromise of the account: its
+new owner can register a different key and publish a matching fingerprint
+and signatures, and these commands would then succeed. Note the
+fingerprint the first time you verify, and treat a change as a reason to
+stop. Details: [docs/TRUST-CHAIN.md](docs/TRUST-CHAIN.md#the-installer-itself-one-root-of-trust).
 
 ```bash
 V=vX.Y.Z   # the release to check
