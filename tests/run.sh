@@ -460,6 +460,26 @@ t_skip_record() {
 }
 
 # --- README stays in sync with the script ------------------------------------
+# released_script_ref REPO TAG -- what the README hash must match: prints "tag"
+# when TAG exists, "working" when the repository has no such tag. Returns 2
+# with the reason when git cannot answer (not a repository, unreadable,
+# ownership refused, git missing). safe.directory is passed on the command
+# line: the checkout may belong to another uid (CI containers), and this
+# suite sets its own HOME, so a global setting would not be seen.
+released_script_ref() {
+  local repo="$1" tag="$2" err rc=0
+  if ! err="$(git -c safe.directory="$repo" -C "$repo" rev-parse --git-dir 2>&1 >/dev/null)"; then
+    printf 'git cannot read %s: %s\n' "$repo" "${err:-git not found}"
+    return 2
+  fi
+  err="$(git -c safe.directory="$repo" -C "$repo" show-ref --verify --quiet "refs/tags/$tag" 2>&1)" || rc=$?
+  case "$rc" in
+    0) echo tag ;;
+    1) echo working ;;
+    *) printf 'git show-ref %s failed (rc=%s): %s\n' "$tag" "$rc" "$err"; return 2 ;;
+  esac
+}
+
 t_readme() {
   local readme="$HERE/../README.md" block want got
   block="$(sed -n '/<!-- usage:begin -->/,/<!-- usage:end -->/p' "$readme" | sed '1,2d;$d' | sed '$d')"
@@ -470,13 +490,20 @@ t_readme() {
   # The snippet downloads the script from tag v$SELF_VERSION, so its hash must
   # match the script as released at that tag, not the working copy (which
   # changes between releases). Before the tag exists (release step 1-4) the
-  # working copy is the release candidate and is compared instead.
-  local ref="working copy"
-  if git -C "$HERE/.." rev-parse -q --verify "refs/tags/v$SELF_VERSION" >/dev/null 2>&1; then
-    want="$(git -C "$HERE/.." show "v$SELF_VERSION:claude-desktop-userland.sh" | sha256sum | cut -d' ' -f1)"
+  # working copy is the release candidate and is compared instead. Any other
+  # git failure is an error, never a silent fall back to the working copy.
+  local repo ref src
+  repo="$(cd "$HERE/.." && pwd -P)"
+  if ! src="$(released_script_ref "$repo" "v$SELF_VERSION" 2>&1)"; then
+    nok "README install hash: git can read the repository" "$src"
+    return 0
+  fi
+  if [ "$src" = tag ]; then
+    want="$(git -c safe.directory="$repo" -C "$repo" show "v$SELF_VERSION:claude-desktop-userland.sh" | sha256sum | cut -d' ' -f1)"
     ref="tag v$SELF_VERSION"
   else
     want="$(sha256sum "$SCRIPT" | cut -d' ' -f1)"
+    ref="working copy"
   fi
   got="$(sed -n 's/^echo "\([0-9a-f]\{64\}\)  claude-desktop-userland.sh" | sha256sum -c -$/\1/p' "$readme")"
   if [ "$got" = "$want" ]; then ok "README install hash matches the script ($ref)"
@@ -701,7 +728,33 @@ t_skip_record_timing() {
 }
 
 # Test groups register themselves here.
-TESTS=(t_sourcing t_apparmor t_libs t_extract t_release_dates t_downgrade t_date_floor t_skip_record t_readme t_version_format t_date_floor_modes t_changelog t_skip_record_timing)
+TESTS=(t_sourcing t_apparmor t_libs t_extract t_release_dates t_downgrade t_date_floor t_skip_record t_readme t_version_format t_date_floor_modes t_changelog t_skip_record_timing t_readme_git)
+
+t_readme_git() {
+  if ! command -v git >/dev/null 2>&1; then
+    skip "README hash source: tag, working copy, git failure" "git not installed"; return 0
+  fi
+  local d="$WORK/readme-git" out rc
+  mkdir -p "$d/plain" "$d/broken"
+  git -C "$d/plain" init -q
+  git -C "$d/plain" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
+  out="$(released_script_ref "$d/plain" v9.9.9)"; rc=$?
+  if [ "$rc" = 0 ] && [ "$out" = working ]; then ok "missing tag falls back to the working copy"
+  else nok "missing tag falls back to the working copy" "rc=$rc out=$out"; fi
+  git -C "$d/plain" tag v9.9.9
+  out="$(released_script_ref "$d/plain" v9.9.9)"; rc=$?
+  if [ "$rc" = 0 ] && [ "$out" = tag ]; then ok "existing tag is used"
+  else nok "existing tag is used" "rc=$rc out=$out"; fi
+  # a .git file pointing nowhere: git itself fails
+  printf 'gitdir: %s/nonexistent\n' "$d" >"$d/broken/.git"
+  out="$(released_script_ref "$d/broken" v9.9.9)"; rc=$?
+  if [ "$rc" = 2 ] && grep -q 'git cannot read' <<<"$out"; then ok "git failure is an error, not a fall back"
+  else nok "git failure is an error, not a fall back" "rc=$rc out=$out"; fi
+  # git missing from PATH entirely
+  out="$(PATH="$WORK/empty-path" released_script_ref "$d/plain" v9.9.9 2>&1)"; rc=$?
+  if [ "$rc" = 2 ]; then ok "missing git is an error, not a fall back"
+  else nok "missing git is an error, not a fall back" "rc=$rc out=$out"; fi
+}
 
 for t in "${TESTS[@]}"; do "$t"; done
 
