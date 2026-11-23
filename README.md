@@ -211,6 +211,9 @@ change:
 | `missing-libs` | shared libraries that do not resolve |
 <!-- fail-ids:end -->
 
+The IDs are stable. Renaming or removing one is a breaking change and is
+recorded as such in [CHANGELOG.md](CHANGELOG.md); new IDs may be added.
+
 ---
 
 ## User namespaces and the Chromium sandbox
@@ -319,6 +322,43 @@ curl -fsSL https://downloads.claude.ai/claude-desktop/key.asc \
 
 If that value differs from `KEY_FPR` in the script, stop and find out why
 before changing anything.
+
+---
+
+## Verify a release signature
+
+From 1.2.0 on, every GitHub Release carries `SHA256SUMS` (the SHA256 of
+`claude-desktop-userland.sh`) and `SHA256SUMS.sig`, a detached SSH signature
+over it made with the same key that signs the release tags. The README hash
+above comes from the same repository as the script; this signature does not.
+
+The public key is published on the maintainer's GitHub account, outside this
+repository, at
+[`api.github.com/users/ABDUAZIZX/ssh_signing_keys`](https://api.github.com/users/ABDUAZIZX/ssh_signing_keys).
+Its fingerprint is
+`SHA256:DFqKPwKi7WOq6aOIBO9yx6LqjhgqC/n29X6v4u8oVsI`.
+
+```bash
+V=vX.Y.Z   # the release to check
+B=https://github.com/ABDUAZIZX/claude-desktop-userland/releases/download/$V
+curl -fsSLO "$B/SHA256SUMS"
+curl -fsSLO "$B/SHA256SUMS.sig"
+curl -fsSLO "$B/claude-desktop-userland.sh"
+
+# the key as published on the GitHub account; check its fingerprint
+curl -fsSL https://api.github.com/users/ABDUAZIZX/ssh_signing_keys \
+  | grep -o '"key": *"[^"]*"' | cut -d'"' -f4 > signing_key.pub
+ssh-keygen -lf signing_key.pub    # must show the fingerprint above
+sed 's/^/release namespaces="file" /' signing_key.pub > allowed_signers
+
+ssh-keygen -Y verify -f allowed_signers -I release -n file \
+  -s SHA256SUMS.sig < SHA256SUMS  # Good "file" signature ...
+sha256sum -c SHA256SUMS           # claude-desktop-userland.sh: OK
+```
+
+The same key verifies the tags (`git tag -v vX.Y.Z` with that key in
+`gpg.ssh.allowedSignersFile`). `tools/release-sums.sh verify DIR
+allowed_signers` runs both checks in one step.
 
 ---
 

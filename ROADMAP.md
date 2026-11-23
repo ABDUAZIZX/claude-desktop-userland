@@ -17,23 +17,31 @@ only**.
   user. A timer never changes what is launched.
 - `--disable-auto-update` removes the units.
 
-## Signed release artifacts
+## `--rollback` (for 1.2.0)
 
-Every release carries a signature that does not come from the same place as
-the file it covers:
+Two versions are kept under `versions/` precisely so an update can be undone,
+but switching back today means re-pointing the `current` link by hand.
 
-- **Signed tag** for every version (`git tag -s`), verifiable with
-  `git tag -v` against a published signing key. Unsigned tags are never
-  pushed.
-- **Signed `SHA256SUMS`** attached to every GitHub Release: the checksum of
-  `claude-desktop-userland.sh` (and of any future asset) plus a detached
-  signature over that file, with a documented verification command
-  (`ssh-keygen -Y verify` against an `allowed_signers` file, or `gpg --verify`,
-  depending on the key type chosen).
-- The README install snippet then gains a step that verifies `SHA256SUMS`
-  before `sha256sum -c`. Today the README hash and the script come from the
-  same repository, which protects against a corrupted download but is not an
-  independent signature.
+- `--rollback` points `current` at the other retained version, offline: no
+  download, no index fetch, so the `Date` floor and the downgrade check are
+  untouched (they guard what the repository serves, not a local switch the
+  user asks for).
+- Refuses when there is no second version, when its directory is incomplete
+  (main binary missing), or when its version string is not `N(.N)*`.
+- Prints both versions and runs the host check on the version switched to,
+  like after an install, including a `host-check-skipped` record of that
+  version.
+- The next plain install still moves forward to the newest version in the
+  repository; `--rollback` does not pin anything.
+
+## Signed release artifacts: install snippet
+
+Releases from 1.2.0 on carry `SHA256SUMS` and `SHA256SUMS.sig`, signed with
+the tag key and verified as documented in RELEASING.md and the README
+section "Verify a release signature". The README install snippet still
+checks the script against the hash in the README only, because the release it
+pins (1.1.0) has no signature. Once 1.2.0 is released, the snippet gains the
+signature check before `sha256sum -c`.
 
 ## Keep the weekly `distros` run alive
 
