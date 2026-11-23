@@ -4,6 +4,8 @@
 
 - The `host-check-skipped` record is written only after the payload is
   installed, so a run that fails later leaves no record behind
+- CI: every action is pinned to a commit SHA, and both workflows run with a
+  read-only token (`contents: read`)
 
 ## 1.1.0 (2026-11-22)
 
