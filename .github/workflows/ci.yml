@@ -6,11 +6,14 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # the README hash test compares against the released tag
           fetch-depth: 0
@@ -28,6 +31,8 @@ jobs:
         run: |
           shellcheck -S warning -s bash claude-desktop-userland.sh
           shellcheck -S warning -x tests/run.sh
+          shellcheck -S warning tests/distro-check.sh tests/distro-run.sh tests/sandbox-check.sh tests/payload-verdict.sh
+          shellcheck -S warning -s sh tests/distro-setup.sh
 
       - name: Unit tests
         run: bash tests/run.sh --no-skip

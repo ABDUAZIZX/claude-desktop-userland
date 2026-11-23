@@ -17,20 +17,6 @@ only**.
   user. A timer never changes what is launched.
 - `--disable-auto-update` removes the units.
 
-## CI distribution matrix
-
-Two kinds of job, because a container cannot test what matters most.
-
-- **Containers** (Ubuntu 22.04 / 24.04, Debian 12 / 13, Fedora, Arch,
-  openSUSE Tumbleweed, Alpine): host checks, library resolution and the
-  `.deb` extraction chain only. Electron inside a container runs as root and
-  needs `--no-sandbox` regardless, so a container says nothing about the
-  sandbox.
-- **Sandbox**: a direct run on a `ubuntu-24.04` runner, no container, as the
-  runner's unprivileged user. This is the only job that exercises the AppArmor
-  userns restriction and the profile from `--print-apparmor-profile`
-  (load, launch headless, confirm the renderer sandbox started, unload).
-
 ## Signed release artifacts
 
 Every release carries a signature that does not come from the same place as
@@ -49,12 +35,25 @@ the file it covers:
   same repository, which protects against a corrupted download but is not an
   independent signature.
 
+## Keep the weekly `distros` run alive
+
+GitHub disables scheduled workflows in a public repository after 60 days
+without repository activity, silently. The weekly run is what catches a new
+upstream release that needs another library, so a quiet repository would lose
+it exactly when nobody is watching.
+
+- Options: re-enable by hand when GitHub's notice arrives, or a keep-alive
+  that makes no commits (for example the workflow calling the API to re-enable
+  itself with a minimal-permission token). Commits only to keep the schedule
+  alive are not wanted.
+
 ## README compatibility table
 
 Generated from the CI results, with wording that matches what was actually
 tested:
 
-- **"Libraries checked"** when only the container job ran for that
-  distribution.
+- **"Libraries checked"** when only the `containers` job of the `distros`
+  workflow ran for that distribution.
 - **"Works"** only when the application was actually launched and the sandbox
-  confirmed on that distribution.
+  confirmed on that distribution (today only the `sandbox` job, on Ubuntu
+  24.04).

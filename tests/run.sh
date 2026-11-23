@@ -460,6 +460,26 @@ t_skip_record() {
 }
 
 # --- README stays in sync with the script ------------------------------------
+# released_script_ref REPO TAG -- what the README hash must match: prints "tag"
+# when TAG exists, "working" when the repository has no such tag. Returns 2
+# with the reason when git cannot answer (not a repository, unreadable,
+# ownership refused, git missing). safe.directory is passed on the command
+# line: the checkout may belong to another uid (CI containers), and this
+# suite sets its own HOME, so a global setting would not be seen.
+released_script_ref() {
+  local repo="$1" tag="$2" err rc=0
+  if ! err="$(git -c safe.directory="$repo" -C "$repo" rev-parse --git-dir 2>&1 >/dev/null)"; then
+    printf 'git cannot read %s: %s\n' "$repo" "${err:-git not found}"
+    return 2
+  fi
+  err="$(git -c safe.directory="$repo" -C "$repo" show-ref --verify --quiet "refs/tags/$tag" 2>&1)" || rc=$?
+  case "$rc" in
+    0) echo tag ;;
+    1) echo working ;;
+    *) printf 'git show-ref %s failed (rc=%s): %s\n' "$tag" "$rc" "$err"; return 2 ;;
+  esac
+}
+
 t_readme() {
   local readme="$HERE/../README.md" block want got
   block="$(sed -n '/<!-- usage:begin -->/,/<!-- usage:end -->/p' "$readme" | sed '1,2d;$d' | sed '$d')"
@@ -470,13 +490,20 @@ t_readme() {
   # The snippet downloads the script from tag v$SELF_VERSION, so its hash must
   # match the script as released at that tag, not the working copy (which
   # changes between releases). Before the tag exists (release step 1-4) the
-  # working copy is the release candidate and is compared instead.
-  local ref="working copy"
-  if git -C "$HERE/.." rev-parse -q --verify "refs/tags/v$SELF_VERSION" >/dev/null 2>&1; then
-    want="$(git -C "$HERE/.." show "v$SELF_VERSION:claude-desktop-userland.sh" | sha256sum | cut -d' ' -f1)"
+  # working copy is the release candidate and is compared instead. Any other
+  # git failure is an error, never a silent fall back to the working copy.
+  local repo ref src
+  repo="$(cd "$HERE/.." && pwd -P)"
+  if ! src="$(released_script_ref "$repo" "v$SELF_VERSION" 2>&1)"; then
+    nok "README install hash: git can read the repository" "$src"
+    return 0
+  fi
+  if [ "$src" = tag ]; then
+    want="$(git -c safe.directory="$repo" -C "$repo" show "v$SELF_VERSION:claude-desktop-userland.sh" | sha256sum | cut -d' ' -f1)"
     ref="tag v$SELF_VERSION"
   else
     want="$(sha256sum "$SCRIPT" | cut -d' ' -f1)"
+    ref="working copy"
   fi
   got="$(sed -n 's/^echo "\([0-9a-f]\{64\}\)  claude-desktop-userland.sh" | sha256sum -c -$/\1/p' "$readme")"
   if [ "$got" = "$want" ]; then ok "README install hash matches the script ($ref)"
@@ -701,7 +728,60 @@ t_skip_record_timing() {
 }
 
 # Test groups register themselves here.
-TESTS=(t_sourcing t_apparmor t_libs t_extract t_release_dates t_downgrade t_date_floor t_skip_record t_readme t_version_format t_date_floor_modes t_changelog t_skip_record_timing)
+TESTS=(t_sourcing t_apparmor t_libs t_extract t_release_dates t_downgrade t_date_floor t_skip_record t_readme t_version_format t_date_floor_modes t_changelog t_skip_record_timing t_readme_git t_payload_verdict)
+
+t_readme_git() {
+  if ! command -v git >/dev/null 2>&1; then
+    skip "README hash source: tag, working copy, git failure" "git not installed"; return 0
+  fi
+  local d="$WORK/readme-git" out rc
+  mkdir -p "$d/plain" "$d/broken"
+  git -C "$d/plain" init -q
+  git -C "$d/plain" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
+  out="$(released_script_ref "$d/plain" v9.9.9)"; rc=$?
+  if [ "$rc" = 0 ] && [ "$out" = working ]; then ok "missing tag falls back to the working copy"
+  else nok "missing tag falls back to the working copy" "rc=$rc out=$out"; fi
+  git -C "$d/plain" tag v9.9.9
+  out="$(released_script_ref "$d/plain" v9.9.9)"; rc=$?
+  if [ "$rc" = 0 ] && [ "$out" = tag ]; then ok "existing tag is used"
+  else nok "existing tag is used" "rc=$rc out=$out"; fi
+  # a .git file pointing nowhere: git itself fails
+  printf 'gitdir: %s/nonexistent\n' "$d" >"$d/broken/.git"
+  out="$(released_script_ref "$d/broken" v9.9.9)"; rc=$?
+  if [ "$rc" = 2 ] && grep -q 'git cannot read' <<<"$out"; then ok "git failure is an error, not a fall back"
+  else nok "git failure is an error, not a fall back" "rc=$rc out=$out"; fi
+  # git missing from PATH entirely
+  out="$(PATH="$WORK/empty-path" released_script_ref "$d/plain" v9.9.9 2>&1)"; rc=$?
+  if [ "$rc" = 2 ]; then ok "missing git is an error, not a fall back"
+  else nok "missing git is an error, not a fall back" "rc=$rc out=$out"; fi
+}
+
+# payload-verdict.sh, the distros workflow's judgement of a live install.
+t_payload_verdict() {
+  local d="$WORK/verdict" v="$HERE/payload-verdict.sh" aa
+  mkdir -p "$d"
+  printf '1\n' >"$d/sysctl"
+  aa="$( (HOST_FAIL=0; check_userns "$d/sysctl" "$d/no-profile") 2>&1 )"
+  { printf '%s\n' "$aa"; c_warn "Claude Desktop 1.0 installed, but the problems marked [fail] above will stop it from running"; } >"$d/aa.log" 2>&1
+  { cat "$d/aa.log"; h_fail "missing shared libraries:"; } >"$d/aa-libs.log" 2>&1
+  c_ok "all good" >"$d/clean.log" 2>&1
+  die_msg() { c_err "$1"; }
+  die_msg "could not download signing key" >"$d/net.log" 2>&1
+  die_msg "repository index failed the freshness check" >"$d/stale.log" 2>&1
+  die_msg "InRelease signature verification FAILED" >"$d/sig.log" 2>&1
+
+  expect_rc 0 "verdict: only the AppArmor [fail] with rc=1 is accepted" bash "$v" "$d/aa.log" 1 installed
+  expect_rc 1 "verdict: AppArmor plus a library [fail] is rejected" bash "$v" "$d/aa-libs.log" 1 installed
+  expect_rc 1 "verdict: rc=1 without any [fail] line is rejected" bash "$v" "$d/clean.log" 1 installed
+  expect_rc 1 "verdict: rc other than 1 is rejected" bash "$v" "$d/aa.log" 2 installed
+  expect_rc 0 "verdict: rc=0 with a clean host check is accepted" bash "$v" "$d/clean.log" 0 installed
+  expect_rc 1 "verdict: rc=0 with a [fail] line is rejected" bash "$v" "$d/aa.log" 0 installed
+  expect_rc 3 "verdict: unreachable repository is reported as such" bash "$v" "$d/net.log" 1 missing
+  expect_rc 3 "verdict: stale index is reported as such" bash "$v" "$d/stale.log" 1 missing
+  expect_rc 1 "verdict: a signature failure is an install failure" bash "$v" "$d/sig.log" 1 missing
+  expect_out 'Live repository unavailable.*not a defect in the code' "verdict: the annotation says it is not a code defect" \
+    bash "$v" "$d/net.log" 1 missing
+}
 
 for t in "${TESTS[@]}"; do "$t"; done
 
