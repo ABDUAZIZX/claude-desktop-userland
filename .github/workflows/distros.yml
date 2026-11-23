@@ -112,9 +112,9 @@ jobs:
       matrix:
         include:
           - { name: almalinux-8, image: 'docker.io/library/almalinux:8',
-              expect: 'glibc 2\.28 is older than the required 2\.34' }
+              expect: '^\[fail:glibc-too-old\] glibc 2\.28 ' }
           - { name: alpine,      image: 'docker.io/library/alpine:3',
-              expect: 'glibc not found \(musl' }
+              expect: '^\[fail:glibc-missing\] ' }
     name: refused (${{ matrix.name }})
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0

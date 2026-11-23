@@ -195,6 +195,22 @@ systems the package name (for example `libasound2t64` versus `libasound2`) is
 the one `apt-cache` knows. Without binutils the library check is skipped with
 a warning.
 
+Each blocking problem is printed with a fixed marker, `[fail:<id>]`, so
+scripts can tell problems apart without matching the wording, which may
+change:
+
+<!-- fail-ids:begin -->
+| Marker | Meaning |
+| --- | --- |
+| `glibc-missing` | no glibc (musl); refused |
+| `glibc-too-old` | glibc older than 2.34 |
+| `glibc-check-skipped` | the installed version was installed with `--skip-host-check` |
+| `userns-disabled` | `user.max_user_namespaces=0` |
+| `userns-clone-disabled` | Debian's `kernel.unprivileged_userns_clone=0` |
+| `apparmor-userns` | Ubuntu 24.04+ AppArmor userns restriction and no profile |
+| `missing-libs` | shared libraries that do not resolve |
+<!-- fail-ids:end -->
+
 ---
 
 ## User namespaces and the Chromium sandbox

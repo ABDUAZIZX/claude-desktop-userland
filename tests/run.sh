@@ -728,7 +728,7 @@ t_skip_record_timing() {
 }
 
 # Test groups register themselves here.
-TESTS=(t_sourcing t_apparmor t_libs t_extract t_release_dates t_downgrade t_date_floor t_skip_record t_readme t_version_format t_date_floor_modes t_changelog t_skip_record_timing t_readme_git t_payload_verdict)
+TESTS=(t_sourcing t_apparmor t_libs t_extract t_release_dates t_downgrade t_date_floor t_skip_record t_readme t_version_format t_date_floor_modes t_changelog t_skip_record_timing t_readme_git t_payload_verdict t_fail_ids)
 
 t_readme_git() {
   if ! command -v git >/dev/null 2>&1; then
@@ -763,7 +763,12 @@ t_payload_verdict() {
   printf '1\n' >"$d/sysctl"
   aa="$( (HOST_FAIL=0; check_userns "$d/sysctl" "$d/no-profile") 2>&1 )"
   { printf '%s\n' "$aa"; c_warn "Claude Desktop 1.0 installed, but the problems marked [fail] above will stop it from running"; } >"$d/aa.log" 2>&1
-  { cat "$d/aa.log"; h_fail "missing shared libraries:"; } >"$d/aa-libs.log" 2>&1
+  { cat "$d/aa.log"; h_fail missing-libs "missing shared libraries:"; } >"$d/aa-libs.log" 2>&1
+  # same marker, different wording: must still be accepted
+  { h_fail apparmor-userns "reworded: user namespaces are restricted by AppArmor"; c_warn "installed, but the problems marked [fail:...] above will stop it from running"; } >"$d/aa-reworded.log" 2>&1
+  # the old prose without the marker: must not be accepted
+  { c_err "AppArmor restricts unprivileged user namespaces (Ubuntu 24.04+): the renderer sandbox cannot start"; } >"$d/aa-unmarked.log" 2>&1
+  { h_fail apparmor-userns "x"; h_fail apparmor-userns "x"; } >"$d/aa-twice.log" 2>&1
   c_ok "all good" >"$d/clean.log" 2>&1
   die_msg() { c_err "$1"; }
   die_msg "could not download signing key" >"$d/net.log" 2>&1
@@ -772,6 +777,9 @@ t_payload_verdict() {
 
   expect_rc 0 "verdict: only the AppArmor [fail] with rc=1 is accepted" bash "$v" "$d/aa.log" 1 installed
   expect_rc 1 "verdict: AppArmor plus a library [fail] is rejected" bash "$v" "$d/aa-libs.log" 1 installed
+  expect_rc 0 "verdict: matches the marker, not the wording" bash "$v" "$d/aa-reworded.log" 1 installed
+  expect_rc 1 "verdict: the AppArmor text without the marker is rejected" bash "$v" "$d/aa-unmarked.log" 1 installed
+  expect_rc 1 "verdict: two failure lines are rejected even with the same marker" bash "$v" "$d/aa-twice.log" 1 installed
   expect_rc 1 "verdict: rc=1 without any [fail] line is rejected" bash "$v" "$d/clean.log" 1 installed
   expect_rc 1 "verdict: rc other than 1 is rejected" bash "$v" "$d/aa.log" 2 installed
   expect_rc 0 "verdict: rc=0 with a clean host check is accepted" bash "$v" "$d/clean.log" 0 installed
@@ -781,6 +789,33 @@ t_payload_verdict() {
   expect_rc 1 "verdict: a signature failure is an install failure" bash "$v" "$d/sig.log" 1 missing
   expect_out 'Live repository unavailable.*not a defect in the code' "verdict: the annotation says it is not a code defect" \
     bash "$v" "$d/net.log" 1 missing
+}
+
+# Host-check failure markers: format, use at every call site, README list.
+t_fail_ids() {
+  local out ids readme_ids bad
+  out="$( (h_fail some-id "message text"; echo "rc=$HOST_FAIL") 2>&1 | sed 's/\x1b\[[0-9;]*m//g')"
+  if [ "$out" = "$(printf '[fail:some-id] message text\nrc=1')" ]; then ok "h_fail prints [fail:ID] and sets HOST_FAIL"
+  else nok "h_fail prints [fail:ID] and sets HOST_FAIL" "$out"; fi
+
+  # every call passes an ID first; a call starting with a quoted message has none
+  bad="$(grep -nE '^[[:space:]]*h_fail[[:space:]]' "$SCRIPT" | grep -vE 'h_fail [a-z0-9-]+ "' || true)"
+  if [ -z "$bad" ]; then ok "every h_fail call passes a marker ID"
+  else nok "every h_fail call passes a marker ID" "$bad"; fi
+
+  ids="$(sed -nE 's/^[[:space:]]*h_fail ([a-z0-9-]+) ".*/\1/p' "$SCRIPT" | sort -u)"
+  readme_ids="$(sed -n '/<!-- fail-ids:begin -->/,/<!-- fail-ids:end -->/p' "$HERE/../README.md" \
+    | sed -nE 's/^\| `([a-z0-9-]+)` \|.*/\1/p' | sort -u)"
+  if [ -n "$ids" ] && [ "$ids" = "$readme_ids" ]; then ok "README lists exactly the marker IDs the script uses"
+  else nok "README lists exactly the marker IDs the script uses" "$(diff <(printf '%s\n' "$ids") <(printf '%s\n' "$readme_ids"))"; fi
+
+  # the verdict's expected marker is the one check_userns really prints
+  local d="$WORK/fail-ids" want
+  mkdir -p "$d"; printf '1\n' >"$d/sysctl"
+  want="$(sed -nE "s/^EXPECTED='([a-z0-9-]+)'$/\1/p" "$HERE/payload-verdict.sh")"
+  out="$( (HOST_FAIL=0; check_userns "$d/sysctl" "$d/no-profile") 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep -E '^\[fail:' )"
+  if [ -n "$want" ] && [ "${out%%]*}]" = "[fail:$want]" ]; then ok "payload verdict expects the marker check_userns prints ($want)"
+  else nok "payload verdict expects the marker check_userns prints ($want)" "check_userns printed: $out"; fi
 }
 
 for t in "${TESTS[@]}"; do "$t"; done

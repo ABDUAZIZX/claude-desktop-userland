@@ -123,7 +123,7 @@ ok "AppArmor restricts unprivileged user namespaces on this host"
 
 # --- 2. --doctor reports it ------------------------------------------------
 out="$(bash "$SCRIPT" --doctor 2>&1 | strip_ansi || true)"
-grep -q 'AppArmor restricts unprivileged user namespaces' <<<"$out" \
+grep -q '^\[fail:apparmor-userns\] ' <<<"$out" \
   || { printf '%s\n' "$out"; fail "--doctor did not report the AppArmor restriction"; }
 ok "--doctor reports the restriction without a profile"
 
