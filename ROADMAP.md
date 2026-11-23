@@ -2,21 +2,6 @@
 
 Planned, not implemented. Each item lists the constraint that shapes it.
 
-## `--enable-auto-update`
-
-A systemd user timer plus service that **downloads, verifies and notifies
-only**.
-
-- The timer runs the full trust chain (fingerprint, `InRelease` signature,
-  `Valid-Until`, `Date` floor, `Packages` and `.deb` checksums) and stages the
-  verified version under `versions/<ver>` without touching `current`.
-- It then sends a desktop notification (`notify-send`, or the journal when no
-  session bus is present) naming the staged version and the result of the
-  `--inspect` metadata diff.
-- Switching `current` to the staged version stays a manual command run by the
-  user. A timer never changes what is launched.
-- `--disable-auto-update` removes the units.
-
 ## Keep the weekly `distros` run alive
 
 GitHub disables scheduled workflows in a public repository after 60 days

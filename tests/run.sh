@@ -24,7 +24,10 @@ trap 'rm -rf "$WORK"' EXIT
 
 # Isolate every path the script derives from HOME before sourcing it.
 export HOME="$WORK/home"
-unset XDG_DATA_HOME
+# Every XDG path the script reads must follow HOME: a set XDG_CONFIG_HOME
+# (GitHub runners have one) would send the systemd unit tests into the real
+# ~/.config/systemd/user.
+unset XDG_DATA_HOME XDG_CONFIG_HOME
 mkdir -p "$HOME"
 
 # Preflight requires curl and gpg to exist, but the tests that reach it never
@@ -238,6 +241,9 @@ make_deb() {
     printf '#!/bin/sh\nexit 0\n' >"$src/data/usr/lib/claude-desktop/claude-desktop"
     chmod +x "$src/data/usr/lib/claude-desktop/claude-desktop"
     : >"$src/data/usr/lib/claude-desktop/resources/app.asar"
+    mkdir -p "$src/data/usr/share/applications"
+    printf '[Desktop Entry]\nName=Fixture Claude\nExec=/usr/bin/claude-desktop %%u\nType=Application\n' \
+      >"$src/data/usr/share/applications/claude-desktop.desktop"
   fi
   tar -C "$src/ctl" -cf - . | xz -c >"$src/m/control.tar.xz"
   case "$comp" in
@@ -737,7 +743,7 @@ t_skip_record_timing() {
 }
 
 # Test groups register themselves here.
-TESTS=(t_sourcing t_apparmor t_libs t_extract t_release_dates t_downgrade t_date_floor t_skip_record t_readme t_version_format t_date_floor_modes t_changelog t_skip_record_timing t_readme_git t_payload_verdict t_fail_ids t_release_sums t_rollback)
+TESTS=(t_sourcing t_apparmor t_libs t_extract t_release_dates t_downgrade t_date_floor t_skip_record t_readme t_version_format t_date_floor_modes t_changelog t_skip_record_timing t_readme_git t_payload_verdict t_fail_ids t_release_sums t_rollback t_auto_update t_auto_update_units)
 
 t_readme_git() {
   if ! command -v git >/dev/null 2>&1; then
@@ -978,6 +984,150 @@ t_rollback() {
 
   # the next plain install moves forward again: not a downgrade from the rolled-back version
   expect_rc 0 "after rollback, the newer repository version is not a downgrade" check_version_order 1.0.0 2.0.0 0
+}
+
+# --enable-auto-update / --stage / --activate-staged against the offline repo
+# fixture. notify-send and systemctl are stubs that log their arguments.
+t_auto_update() {
+  if ! command -v gpg >/dev/null 2>&1; then
+    skip "auto-update: stage, activate, units" "gpg not installed"; return 0
+  fi
+  local fx="$WORK/repo-au" home="$WORK/hau" base out now nlog="$WORK/notify.log" sha1 sha2
+  now="$(date -u +%s)"
+  base="$home/.local/share/claude-desktop"
+  export FX="$fx"
+  mkdir -p "$home" "$fx/bin"
+  printf '#!/bin/sh\nfor a in "$@"; do printf "%%s|" "$a"; done >>"%s"; echo >>"%s"\n' "$nlog" "$nlog" >"$fx/bin/notify-send"
+  chmod +x "$fx/bin/notify-send"
+  : >"$nlog"
+  export DBUS_SESSION_BUS_ADDRESS="unix:path=$WORK/fake-bus"
+
+  make_repo_fixture "$fx" $((now - 300)) 1.0.0 app || { nok "build fixture 1.0.0"; return 0; }
+  run_main_offline "$fx" "$home" >/dev/null
+  [ "$(basename "$(readlink -f "$base/current")")" = 1.0.0 ] && ok "auto-update fixture: 1.0.0 installed" \
+    || { nok "auto-update fixture: 1.0.0 installed"; return 0; }
+  sha1="$(sha256sum "$home/.local/bin/claude-desktop" | cut -d' ' -f1)"
+
+  make_repo_fixture "$fx" $((now - 200)) 2.0.0 app || { nok "build fixture 2.0.0"; return 0; }
+  out="$(run_main_offline "$fx" "$home" --stage)"
+  if [ -x "$base/staged/2.0.0/app/claude-desktop" ] && [ -f "$base/staged/2.0.0/root/usr/share/applications/claude-desktop.desktop" ] \
+     && [ "$(basename "$(readlink -f "$base/current")")" = 1.0.0 ] && [ ! -d "$base/versions/2.0.0" ]; then
+    ok "--stage verifies and stages 2.0.0 outside versions/, current untouched"
+  else nok "--stage verifies and stages 2.0.0 outside versions/, current untouched" "$(tail -n 5 <<<"$out")"; fi
+  sha2="$(sha256sum "$home/.local/bin/claude-desktop" | cut -d' ' -f1)"
+  [ "$sha1" = "$sha2" ] && ok "--stage does not touch the launcher" || nok "--stage does not touch the launcher"
+  if grep -q 'Claude Desktop 2.0.0 verified and staged|Installed: 1.0.0. relations and maintainer scripts unchanged since 1.0.0' "$nlog" \
+     && grep -q -- '--activate-staged' "$nlog"; then
+    ok "--stage notifies with the version, the metadata diff and the activate command"
+  else nok "--stage notifies with the version, the metadata diff and the activate command" "$(cat "$nlog")"; fi
+
+  : >"$nlog"
+  out="$(run_main_offline "$fx" "$home" --stage)"
+  if grep -q 'already staged' <<<"$out" && [ ! -s "$nlog" ]; then ok "a second --stage neither downloads nor notifies again"
+  else nok "a second --stage neither downloads nor notifies again" "$(tail -n 3 <<<"$out") / $(cat "$nlog")"; fi
+
+  out="$(run_main_offline "$fx" "$home" --check)"
+  grep -q 'staged (not active): 2.0.0' <<<"$out" && ok "--check reports the staged version" || nok "--check reports the staged version" "$out"
+
+  out="$(env HOME="$home" PATH="$STUBS:$PATH" bash "$SCRIPT" --rollback 2>&1)"
+  grep -q 'only 1.0.0 is installed' <<<"$out" && ok "--rollback ignores the staged version" || nok "--rollback ignores the staged version" "$out"
+
+  # activation: offline (curl/gpg stubs fail loudly)
+  out="$(env HOME="$home" PATH="$STUBS:$PATH" bash "$SCRIPT" --activate-staged 2>&1)"
+  if ! grep -q 'test stub' <<<"$out" && [ "$(basename "$(readlink -f "$base/current")")" = 2.0.0 ] \
+     && [ -d "$base/versions/1.0.0" ] && [ ! -e "$base/staged" ] \
+     && grep -q '^Name=Fixture Claude' "$home/.local/share/applications/claude-desktop.desktop"; then
+    ok "--activate-staged switches to 2.0.0 offline, keeps 1.0.0, uses the staged desktop file"
+  else nok "--activate-staged switches to 2.0.0 offline, keeps 1.0.0, uses the staged desktop file" "$(tail -n 6 <<<"$out")"; fi
+  out="$(env HOME="$home" PATH="$STUBS:$PATH" bash -c '. "$1"; set -euo pipefail; rollback_switch; echo "$ROLLBACK_TO"' _ "$SCRIPT" 2>&1)"
+  [ "$out" = 1.0.0 ] && ok "after activation --rollback returns to 1.0.0" || nok "after activation --rollback returns to 1.0.0" "$out"
+  env HOME="$home" PATH="$STUBS:$PATH" bash -c '. "$1"; set -euo pipefail; rollback_switch' _ "$SCRIPT" >/dev/null 2>&1
+
+  expect_out 'nothing is staged' "--activate-staged refuses when nothing is staged" \
+    env HOME="$home" PATH="$STUBS:$PATH" bash "$SCRIPT" --activate-staged
+  mkdir -p "$base/staged/0.5.0/app"; printf '#!/bin/sh\n' >"$base/staged/0.5.0/app/claude-desktop"; chmod +x "$base/staged/0.5.0/app/claude-desktop"
+  expect_out 'not newer than the installed 2.0.0' "--activate-staged refuses a version not newer than installed" \
+    env HOME="$home" PATH="$STUBS:$PATH" bash "$SCRIPT" --activate-staged
+  rm -rf "$base/staged"
+  mkdir -p "$base/staged/3.0.0/app"
+  expect_out 'staged 3.0.0 is incomplete' "--activate-staged refuses an incomplete staged version" \
+    env HOME="$home" PATH="$STUBS:$PATH" bash "$SCRIPT" --activate-staged
+  rm -rf "$base/staged"
+
+  : >"$nlog"
+  out="$(run_main_offline "$fx" "$home" --stage)"
+  if grep -q 'nothing to stage' <<<"$out" && [ ! -s "$nlog" ] && [ ! -e "$base/staged" ]; then ok "--stage with the newest installed stages and notifies nothing"
+  else nok "--stage with the newest installed stages and notifies nothing" "$(tail -n 3 <<<"$out")"; fi
+
+  # failures: verification -> critical notification; network -> journal only
+  make_repo_fixture "$fx" $((now - 100)) 3.0.0 app || { nok "build fixture 3.0.0"; return 0; }
+  cp "$fx/srv/InRelease" "$fx/InRelease.good"
+  sed -i 's/^Suite: stable/Suite: stab1e/' "$fx/srv/InRelease"
+  : >"$nlog"
+  out="$(run_main_offline "$fx" "$home" --stage)"
+  if grep -q 'Claude Desktop update REFUSED|InRelease signature verification FAILED' "$nlog" && grep -q '|critical|' "$nlog" \
+     && [ ! -e "$base/staged" ]; then ok "a verification failure under --stage is notified as critical"
+  else nok "a verification failure under --stage is notified as critical" "$(cat "$nlog") / $(tail -n 3 <<<"$out")"; fi
+  mv "$fx/srv/InRelease" "$fx/InRelease.bad"; : >"$nlog"
+  out="$(run_main_offline "$fx" "$home" --stage)"
+  if grep -q 'network failure' <<<"$out" && [ ! -s "$nlog" ]; then ok "a download failure under --stage is logged, not notified"
+  else nok "a download failure under --stage is logged, not notified" "$(tail -n 3 <<<"$out") / $(cat "$nlog")"; fi
+  mv "$fx/InRelease.good" "$fx/srv/InRelease"
+
+  # an install of the newest version discards an older staged one
+  out="$(run_main_offline "$fx" "$home" --stage)"
+  [ -d "$base/staged/3.0.0" ] || nok "stage 3.0.0 for the discard test" "$(tail -n 3 <<<"$out")"
+  run_main_offline "$fx" "$home" >/dev/null
+  [ ! -e "$base/staged" ] && ok "installing 3.0.0 discards the staged 3.0.0" || nok "installing 3.0.0 discards the staged 3.0.0" "$(ls "$base/staged" 2>&1)"
+  unset DBUS_SESSION_BUS_ADDRESS FX
+
+  expect_rc 1 "--stage cannot be combined with --allow-downgrade" parse_args --stage --allow-downgrade
+  expect_rc 1 "--activate-staged cannot be combined with --skip-host-check" parse_args --activate-staged --skip-host-check
+}
+
+t_auto_update_units() {
+  local h="$WORK/hunits" slog="$WORK/systemctl.log" sbin="$WORK/sysbin" out svc tmr
+  mkdir -p "$h/.local/share/claude-desktop/versions/1.0.0" "$sbin"
+  ln -s "$h/.local/share/claude-desktop/versions/1.0.0" "$h/.local/share/claude-desktop/current"
+  printf '#!/bin/sh\necho "$*" >>"%s"\n' "$slog" >"$sbin/systemctl"; chmod +x "$sbin/systemctl"
+  : >"$slog"
+
+  svc="$(env HOME="$h" bash -c '. "$1"; unit_service_text' _ "$SCRIPT")"
+  tmr="$(env HOME="$h" bash -c '. "$1"; unit_timer_text' _ "$SCRIPT")"
+  if grep -qx "ExecStart=$h/.local/share/claude-desktop/updater/claude-desktop-userland.sh --stage" <<<"$svc" \
+     && grep -qx 'NoNewPrivileges=yes' <<<"$svc" && grep -qx 'Type=oneshot' <<<"$svc" && ! grep -q '%' <<<"$svc"; then
+    ok "service unit runs the updater copy with --stage, absolute path, NoNewPrivileges"
+  else nok "service unit runs the updater copy with --stage, absolute path, NoNewPrivileges" "$svc"; fi
+  if grep -qx 'OnCalendar=daily' <<<"$tmr" && grep -qx 'Persistent=true' <<<"$tmr" && grep -qx 'WantedBy=timers.target' <<<"$tmr"; then
+    ok "timer unit: daily, persistent"
+  else nok "timer unit: daily, persistent" "$tmr"; fi
+
+  local ud
+  ud="$(env HOME="$h" bash -c '. "$1"; printf %s "$UNIT_DIR"' _ "$SCRIPT")"
+  case "$ud" in "$h"/*) ok "unit directory follows the test HOME" ;;
+    *) nok "unit directory follows the test HOME" "$ud"; return 0 ;; esac
+  out="$(env HOME="$h" PATH="$sbin:$PATH" bash "$SCRIPT" --enable-auto-update 2>&1)"
+  if [ -f "$h/.config/systemd/user/claude-desktop-update.service" ] && [ -f "$h/.config/systemd/user/claude-desktop-update.timer" ] \
+     && [ -x "$h/.local/share/claude-desktop/updater/claude-desktop-userland.sh" ] \
+     && cmp -s "$SCRIPT" "$h/.local/share/claude-desktop/updater/claude-desktop-userland.sh" \
+     && grep -qx 'enable --now claude-desktop-update.timer' <<<"$(sed 's/^--user //' "$slog")"; then
+    ok "--enable-auto-update writes both units, copies this script, enables the timer"
+  else nok "--enable-auto-update writes both units, copies this script, enables the timer" "$out / $(cat "$slog")"; fi
+
+  : >"$slog"
+  out="$(env HOME="$h" PATH="$sbin:$PATH" bash "$SCRIPT" --disable-auto-update 2>&1)"
+  if [ ! -e "$h/.config/systemd/user/claude-desktop-update.timer" ] && [ ! -e "$h/.config/systemd/user/claude-desktop-update.service" ] \
+     && [ ! -e "$h/.local/share/claude-desktop/updater" ] && grep -q 'disable --now claude-desktop-update.timer' "$slog"; then
+    ok "--disable-auto-update stops the timer and removes the units and the copy"
+  else nok "--disable-auto-update stops the timer and removes the units and the copy" "$out / $(cat "$slog")"; fi
+
+  env HOME="$h" PATH="$sbin:$PATH" bash "$SCRIPT" --enable-auto-update >/dev/null 2>&1
+  env HOME="$h" PATH="$sbin:$PATH" bash "$SCRIPT" --uninstall >/dev/null 2>&1
+  [ ! -e "$h/.config/systemd/user/claude-desktop-update.timer" ] && ok "--uninstall also removes the auto-update units" \
+    || nok "--uninstall also removes the auto-update units"
+
+  expect_out 'not installed; install it first' "--enable-auto-update refuses before an install" \
+    env HOME="$WORK/hunits-empty" PATH="$sbin:$PATH" bash "$SCRIPT" --enable-auto-update
 }
 
 for t in "${TESTS[@]}"; do "$t"; done

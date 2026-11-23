@@ -57,13 +57,21 @@ CURRENT="$BASE/current"
 BIN="$HOME/.local/bin/claude-desktop"
 DESKTOP_FILE="${XDG_DATA_HOME:-$HOME/.local/share}/applications/claude-desktop.desktop"
 ICON_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor"
+# --enable-auto-update: verified versions are staged here, outside versions/,
+# so --rollback and the two-version retention never see them
+STAGED_DIR="$BASE/staged"
+UPDATER_DIR="$BASE/updater"
+UPDATER="$UPDATER_DIR/claude-desktop-userland.sh"
+UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+UNIT_NAME="claude-desktop-update"
 
 # --- helpers ---------------------------------------------------------------
 c_ok()   { printf '\033[32m[ ok ]\033[0m %s\n' "$*"; }
 c_info() { printf '\033[36m[info]\033[0m %s\n' "$*"; }
 c_warn() { printf '\033[33m[warn]\033[0m %s\n' "$*" >&2; }
 c_err()  { printf '\033[31m[fail]\033[0m %s\n' "$*" >&2; }
-die()    { c_err "$*"; exit 1; }
+LAST_DIE_MSG=""
+die()    { LAST_DIE_MSG="$*"; c_err "$*"; exit 1; }
 
 need() { command -v "$1" >/dev/null 2>&1 || die "missing required tool: $1"; }
 
@@ -715,6 +723,7 @@ save_release_date() {
 # --- uninstall -------------------------------------------------------------
 do_uninstall() {
   local purge="${1:-no}"
+  remove_auto_update_units quiet
   rm -f  "$BIN" "$DESKTOP_FILE"
   find "$ICON_ROOT" -name 'claude-desktop.*' -delete 2>/dev/null || true
   rm -rf "$BASE"
@@ -732,6 +741,203 @@ do_uninstall() {
     c_info "config kept at ~/.config/Claude (use --purge to delete)"
   fi
   exit 0
+}
+
+# --- staged updates (--enable-auto-update) ------------------------------------
+# A systemd user timer runs "--stage": the full trust chain, then the verified
+# payload is placed under staged/<ver>. Nothing that is launched changes; the
+# user switches with --activate-staged.
+
+# Newest staged version (directory name), or nothing.
+staged_version() {
+  [ -d "$STAGED_DIR" ] || return 0
+  find "$STAGED_DIR" -mindepth 1 -maxdepth 1 -type d ! -name '*.new' -printf '%f\n' 2>/dev/null \
+    | sort -V | tail -n1
+}
+
+# discard_obsolete_staged INSTALLED-VERSION -- drop staged versions that are
+# not newer than the installed one (an install or activation superseded them).
+discard_obsolete_staged() {
+  local inst="$1" d v
+  [ -d "$STAGED_DIR" ] || return 0
+  for d in "$STAGED_DIR"/*/; do
+    [ -d "$d" ] || continue
+    v="$(basename "$d")"
+    if [ "$v" = "$inst" ] || ! valid_version "$v" || version_lt "$v" "$inst"; then
+      rm -rf "${STAGED_DIR:?}/$v"
+    fi
+  done
+  rmdir "$STAGED_DIR" 2>/dev/null || true
+}
+
+# notify SUMMARY BODY [urgency] -- desktop notification when a session bus is
+# reachable; the text always goes to stdout too (the journal, under systemd).
+notify() {
+  local summary="$1" body="$2" urgency="${3:-normal}"
+  printf '%s: %s\n' "$summary" "$body"
+  if [ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ] && command -v notify-send >/dev/null 2>&1; then
+    notify-send -a "Claude Desktop updater" -i claude-desktop -u "$urgency" -- "$summary" "$body" \
+      2>/dev/null || c_warn "notify-send failed; message is in the journal only"
+  fi
+}
+
+# Exit handler for --stage. A failed download is logged only (the timer
+# retries; a stale index is refused anyway by Valid-Until). Anything else --
+# signature, checksum, fingerprint, freshness, downgrade -- is notified.
+stage_on_exit() {
+  local rc="$1"
+  [ "$rc" != 0 ] || return 0
+  case "$LAST_DIE_MSG" in
+    "could not download"*|"download failed"*)
+      printf 'update check: network failure (%s); will retry at the next timer run\n' "$LAST_DIE_MSG" ;;
+    *)
+      notify "Claude Desktop update REFUSED" \
+        "${LAST_DIE_MSG:-the update check failed (exit $rc)}. Nothing was changed. Details: journalctl --user -u $UNIT_NAME" critical ;;
+  esac
+}
+
+# step_stage_payload -- after step_locate_app: keep the app directory plus the
+# desktop file and icons (needed when activating), under staged/<ver>.
+step_stage_payload() {
+  local dest="$STAGED_DIR/$VER"
+  rm -rf "$dest.new"
+  mkdir -p "$dest.new/root/usr/share"
+  cp -a "$APPDIR" "$dest.new/app"
+  [ -d "$ROOT/usr/share/applications" ] && cp -a "$ROOT/usr/share/applications" "$dest.new/root/usr/share/"
+  [ -d "$ROOT/usr/share/icons" ] && cp -a "$ROOT/usr/share/icons" "$dest.new/root/usr/share/"
+  rm -rf "$dest"
+  mv "$dest.new" "$dest"
+  # only the newest staged version is kept
+  local d
+  for d in "$STAGED_DIR"/*/; do
+    [ -d "$d" ] || continue
+    [ "$(basename "$d")" = "$VER" ] || rm -rf "${STAGED_DIR:?}/$(basename "$d")"
+  done
+  c_ok "staged $VER at $dest (current still ${INSTALLED_VER:-none})"
+  notify "Claude Desktop $VER verified and staged" \
+    "Installed: ${INSTALLED_VER:-none}. ${META_DIFF:-package metadata not compared}. Activate with: $(activate_hint)"
+}
+
+# The command the user runs to activate: the updater copy when it exists.
+activate_hint() {
+  if [ -x "$UPDATER" ]; then printf '%s --activate-staged' "$UPDATER"
+  else printf 'claude-desktop-userland.sh --activate-staged'; fi
+}
+
+# do_activate_staged -- offline. Moves the newest staged version into versions/
+# and makes it current, then the same launcher, desktop entry and host check
+# as an install. Refuses a staged version that is malformed, incomplete or not
+# newer than the installed one.
+do_activate_staged() {
+  local inst=""
+  VER="$(staged_version)"
+  [ -n "$VER" ] || die "nothing is staged (the auto-update timer stages verified versions; see --enable-auto-update)"
+  valid_version "$VER" || die "staged version $(printf '%q' "$VER") is not of the form N(.N)*; refusing"
+  [ -L "$CURRENT" ] && inst="$(basename "$(readlink -f "$CURRENT")")"
+  if [ -n "$inst" ] && ! version_lt "$inst" "$VER"; then
+    die "staged $VER is not newer than the installed $inst; nothing to activate (it is discarded by the next install)"
+  fi
+  APPDIR="$STAGED_DIR/$VER/app"
+  ROOT="$STAGED_DIR/$VER/root"
+  BINNAME="$(CURRENT="$APPDIR" installed_binname)" \
+    || die "staged $VER is incomplete (no main executable in $APPDIR); refusing"
+  [ -x "$APPDIR/$BINNAME" ] || die "staged $VER is incomplete ($BINNAME not executable); refusing"
+  c_info "activating staged $VER (installed: ${inst:-none}); nothing is downloaded"
+  INSTALL_MOVE=1 step_install_payload
+  step_write_launcher
+  step_write_desktop_entry
+  discard_obsolete_staged "$VER"
+  step_final_report
+}
+
+# --- systemd user units ---------------------------------------------------------
+unit_service_text() {
+  cat <<UNIT
+# Generated by claude-desktop-userland.sh $SELF_VERSION (--enable-auto-update).
+# Downloads, verifies and STAGES updates only; it never changes what is
+# launched. Activate a staged version with: $UPDATER --activate-staged
+[Unit]
+Description=Stage verified Claude Desktop updates (claude-desktop-userland)
+Documentation=https://github.com/ABDUAZIZX/claude-desktop-userland
+
+[Service]
+Type=oneshot
+ExecStart=$UPDATER --stage
+NoNewPrivileges=yes
+Nice=10
+IOSchedulingClass=idle
+UNIT
+}
+
+unit_timer_text() {
+  cat <<UNIT
+# Generated by claude-desktop-userland.sh $SELF_VERSION (--enable-auto-update).
+[Unit]
+Description=Daily check for Claude Desktop updates (stage only)
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+UNIT
+}
+
+# systemctl --user, isolated in one function so tests can replace it.
+user_systemctl() { systemctl --user "$@"; }
+
+do_enable_auto_update() {
+  local src="${BASH_SOURCE[0]:-$0}"
+  [ -L "$CURRENT" ] || die "Claude Desktop is not installed; install it first, then enable auto-update"
+  command -v systemctl >/dev/null 2>&1 || die "systemctl not found: auto-update needs a systemd user manager"
+  user_systemctl show-environment >/dev/null 2>&1 \
+    || die "no systemd user manager reachable (systemctl --user); auto-update needs one"
+  case "$UPDATER" in
+    *[[:space:]\"\'\\%\$]*) die "install path $UPDATER contains characters unsafe in a unit file; refusing" ;;
+  esac
+  [ -f "$src" ] && [ -r "$src" ] || die "cannot read this script ($src) to copy it for the timer"
+  # The timer runs a copy of THIS script, the one you verified and ran. It is
+  # never updated automatically; re-run --enable-auto-update with a newer
+  # release to replace it.
+  mkdir -p "$UPDATER_DIR" "$UNIT_DIR"
+  if [ "$(readlink -f "$src")" != "$(readlink -f "$UPDATER" 2>/dev/null || true)" ]; then
+    cp "$src" "$UPDATER.new"
+    chmod 755 "$UPDATER.new"
+    mv "$UPDATER.new" "$UPDATER"
+  fi
+  unit_service_text >"$UNIT_DIR/$UNIT_NAME.service"
+  unit_timer_text >"$UNIT_DIR/$UNIT_NAME.timer"
+  user_systemctl daemon-reload
+  user_systemctl enable --now "$UNIT_NAME.timer"
+  c_ok "auto-update enabled: $UNIT_DIR/$UNIT_NAME.timer (daily, stage only)"
+  c_info "timer runs: $UPDATER --stage  (sha256 $(sha256sum "$UPDATER" | cut -d' ' -f1), version $SELF_VERSION)"
+  c_info "it verifies and stages new versions and notifies you; it never switches what is launched"
+  c_info "activate a staged version: $UPDATER --activate-staged"
+  c_info "status: systemctl --user list-timers $UNIT_NAME.timer   log: journalctl --user -u $UNIT_NAME"
+}
+
+# remove_auto_update_units [quiet] -- also used by --uninstall
+remove_auto_update_units() {
+  local quiet="${1:-}" had=0
+  { [ -f "$UNIT_DIR/$UNIT_NAME.timer" ] || [ -f "$UNIT_DIR/$UNIT_NAME.service" ]; } && had=1
+  if [ "$had" = 1 ] && command -v systemctl >/dev/null 2>&1; then
+    user_systemctl disable --now "$UNIT_NAME.timer" >/dev/null 2>&1 || true
+  fi
+  rm -f "$UNIT_DIR/$UNIT_NAME.timer" "$UNIT_DIR/$UNIT_NAME.service"
+  if [ "$had" = 1 ] && command -v systemctl >/dev/null 2>&1; then
+    user_systemctl daemon-reload >/dev/null 2>&1 || true
+  fi
+  rm -rf "$UPDATER_DIR"
+  if [ "$had" = 1 ]; then c_ok "auto-update disabled: units removed"
+  elif [ "$quiet" != quiet ]; then c_info "auto-update was not enabled"; fi
+}
+
+do_disable_auto_update() {
+  remove_auto_update_units
+  local v; v="$(staged_version)"
+  [ -z "$v" ] || c_info "staged $v kept; activate it with --activate-staged, or it is discarded by the next install"
 }
 
 # --- rollback ----------------------------------------------------------------
@@ -802,6 +1008,15 @@ bootc system, without dpkg, without layering, without root.
   --force       reinstall even if already up to date
   --rollback    switch back to the previous version kept on disk; offline,
                 pins nothing (the next plain run installs the newest again)
+  --enable-auto-update
+                install a daily systemd user timer that downloads, verifies
+                and STAGES new versions and notifies you; it never changes
+                what is launched
+  --disable-auto-update
+                remove that timer
+  --stage       what the timer runs: verify and stage the latest version
+  --activate-staged
+                switch to the staged version, offline
   --allow-downgrade
                 modifier: accept a repository version older than the one
                 installed, and an index Date older than the last one
@@ -843,6 +1058,10 @@ parse_args() {
       --inspect)       m="inspect" ;;
       --force)         m="force" ;;
       --rollback)      m="rollback" ;;
+      --enable-auto-update)  m="enable-au" ;;
+      --disable-auto-update) m="disable-au" ;;
+      --stage)         m="stage" ;;
+      --activate-staged) m="activate" ;;
       --doctor)        m="doctor" ;;
       --print-apparmor-profile) m="apparmor" ;;
       -h|--help)       m="help" ;;
@@ -981,7 +1200,11 @@ c_info "installed: ${INSTALLED_VER:-none}   available: $VER"
 step_download_package() {
 # --- 5. download + verify the .deb -----------------------------------------
 c_info "downloading $VER (~160 MB)"
-curl -fL --progress-bar -o pkg.deb "$REPO_BASE/$FILENAME" || die "download failed"
+if [ "$MODE" = stage ]; then
+  curl -fsSL -o pkg.deb "$REPO_BASE/$FILENAME" || die "download failed"
+else
+  curl -fL --progress-bar -o pkg.deb "$REPO_BASE/$FILENAME" || die "download failed"
+fi
 echo "$DEB_SHA  pkg.deb" | sha256sum -c --quiet - || die "package checksum mismatch"
 c_ok "package checksum verified"
 }
@@ -1163,9 +1386,11 @@ report_package_meta() {
   done
   c_info "saved to $dest"
 
+  META_DIFF=""
   prev="$(find "$META_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' \
           | grep -vxF "$VER" | sort -V | tail -n1 || true)"
   if [ -z "$prev" ]; then
+    META_DIFF="no earlier package metadata to compare"
     c_warn "no earlier package metadata to compare; review the scripts in full:"
     for f in preinst postinst prerm postrm; do
       if [ -f "$dest/$f" ]; then
@@ -1174,8 +1399,10 @@ report_package_meta() {
       fi
     done
   elif diff -ru --exclude=control "$META_DIR/$prev" "$dest"; then
+    META_DIFF="relations and maintainer scripts unchanged since $prev"
     c_ok "relations and maintainer scripts unchanged since $prev"
   else
+    META_DIFF="relations or maintainer scripts CHANGED since $prev; review with --inspect"
     c_warn "relations or maintainer scripts changed since $prev; review the diff above"
   fi
 }
@@ -1243,7 +1470,11 @@ step_install_payload() {
 mkdir -p "$VERSIONS" "$(dirname "$BIN")" "$(dirname "$DESKTOP_FILE")" "$ICON_ROOT"
 TARGET="$VERSIONS/$VER"
 rm -rf "$TARGET" "$TARGET.new"
-cp -a "$APPDIR" "$TARGET.new"
+if [ "${INSTALL_MOVE:-0}" = 1 ]; then
+  mv "$APPDIR" "$TARGET.new"      # --activate-staged: same filesystem, no copy
+else
+  cp -a "$APPDIR" "$TARGET.new"
+fi
 chmod +x "$TARGET.new/$BINNAME" 2>/dev/null || true
 mv "$TARGET.new" "$TARGET"
 ln -sfn "$TARGET" "$CURRENT"
@@ -1258,8 +1489,12 @@ done
 for d in "$META_DIR"/*/; do
   [ -d "$d" ] || continue
   v="$(basename "$d")"
-  [ -d "$VERSIONS/$v" ] || rm -rf "${META_DIR:?}/$v"
+  [ -d "$VERSIONS/$v" ] || [ -d "$STAGED_DIR/$v" ] || rm -rf "${META_DIR:?}/$v"
 done
+# a staged version that is not newer than what is now installed is obsolete;
+# --activate-staged still reads the desktop file and icons from it, and
+# discards it itself afterwards
+[ "${INSTALL_MOVE:-0}" = 1 ] || discard_obsolete_staged "$VER"
 }
 
 step_write_launcher() {
@@ -1379,6 +1614,9 @@ main() {
     purge)     do_uninstall purge ;;
     doctor)    run_doctor; return ;;
     rollback)  do_rollback; return ;;
+    enable-au) do_enable_auto_update; return 0 ;;
+    disable-au) do_disable_auto_update; return 0 ;;
+    activate)  do_activate_staged; return ;;
     apparmor)  print_apparmor_profile; return 0 ;;
     help)      usage; return 0 ;;
     version)   printf '%s\n' "$SELF_VERSION"; return 0 ;;
@@ -1386,7 +1624,11 @@ main() {
 
   step_preflight
   TMP="$(mktemp -d -t claude-desktop.XXXXXXXX)"
-  trap 'rm -rf "$TMP"' EXIT
+  if [ "$MODE" = stage ]; then
+    trap 'rc=$?; rm -rf "$TMP"; stage_on_exit "$rc"' EXIT
+  else
+    trap 'rm -rf "$TMP"' EXIT
+  fi
   cd "$TMP"
 
   step_fetch_verified_index
@@ -1394,6 +1636,7 @@ main() {
   valid_version "$VER" \
     || die "repository version $(printf '%q' "$VER") is not of the form N(.N)*; refusing (it is used in install paths and for version ordering)"
   if [ "$MODE" = "check" ]; then
+    [ -z "$(staged_version)" ] || c_info "staged (not active): $(staged_version); activate with --activate-staged"
     if [ "$INSTALLED_VER" = "$VER" ]; then
       c_ok "up to date"
     elif [ -n "$INSTALLED_VER" ] && version_lt "$VER" "$INSTALLED_VER"; then
@@ -1402,6 +1645,18 @@ main() {
       c_warn "update available"
     fi
     return 0
+  fi
+  if [ "$MODE" = stage ]; then
+    check_version_order "$INSTALLED_VER" "$VER" 0 || die "downgrade refused"
+    if [ "$INSTALLED_VER" = "$VER" ]; then
+      c_ok "installed $VER is the newest; nothing to stage"
+      discard_obsolete_staged "$VER"
+      return 0
+    fi
+    if [ "$(staged_version)" = "$VER" ]; then
+      c_ok "$VER is already staged; not downloaded or notified again"
+      return 0
+    fi
   fi
   if [ "$MODE" = "install" ] || [ "$MODE" = "force" ]; then
     check_version_order "$INSTALLED_VER" "$VER" "$ALLOW_DOWNGRADE" || die "downgrade refused"
@@ -1415,6 +1670,10 @@ main() {
   step_extract_package
   [ "$MODE" = "inspect" ] && return 0
   step_locate_app
+  if [ "$MODE" = stage ]; then
+    step_stage_payload
+    return 0
+  fi
   step_install_payload
   step_record_host_check_skip
   step_write_launcher
