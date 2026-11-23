@@ -130,6 +130,15 @@ bootc system, without dpkg, without layering, without root.
   --force       reinstall even if already up to date
   --rollback    switch back to the previous version kept on disk; offline,
                 pins nothing (the next plain run installs the newest again)
+  --enable-auto-update
+                install a daily systemd user timer that downloads, verifies
+                and STAGES new versions and notifies you; it never changes
+                what is launched
+  --disable-auto-update
+                remove that timer
+  --stage       what the timer runs: verify and stage the latest version
+  --activate-staged
+                switch to the staged version, offline
   --allow-downgrade
                 modifier: accept a repository version older than the one
                 installed, and an index Date older than the last one
@@ -175,6 +184,31 @@ and no signature, freshness or downgrade check is affected.
 Under a Wayland session the launcher adds `--ozone-platform-hint=auto` and
 `--enable-features=WaylandWindowDecorations`, which fixes fractional scaling
 and input method behaviour that are otherwise broken under XWayland.
+
+---
+
+## Automatic update checks
+
+```
+./claude-desktop-userland.sh --enable-auto-update
+```
+
+installs a daily systemd user timer (`claude-desktop-update.timer`) that
+runs the full trust chain, **stages** a newer verified version under
+`~/.local/share/claude-desktop/staged/<ver>` and sends a desktop
+notification with the version and whether its package relations or
+maintainer scripts changed. It never changes what is launched. When you
+are ready:
+
+```
+~/.local/share/claude-desktop/updater/claude-desktop-userland.sh --activate-staged
+```
+
+switches to the staged version offline (launcher, desktop entry and host
+check as after an install); `--rollback` goes back. `--disable-auto-update`
+removes the timer; `--uninstall` does too. The timer runs a copy of the
+script you enabled it with, which is not updated automatically. See
+[docs/LIMITATIONS.md](docs/LIMITATIONS.md) for what is and is not notified.
 
 ---
 

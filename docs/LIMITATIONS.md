@@ -43,23 +43,27 @@ are not extracted and not executed. Consequences:
 
 **No in-app updates.** Claude Desktop on Linux expects to be updated through
 APT. It cannot rewrite `~/.local/share/claude-desktop`, and it would not know
-how to verify a replacement even if it could. Re-run the script. A user timer is
-the tidy way:
+how to verify a replacement even if it could. Re-run the script, or use
+`--enable-auto-update`: a daily user timer that verifies and **stages** new
+versions and notifies you, while switching stays a manual
+`--activate-staged`. Do not point a timer at the script with no arguments:
+that would install unattended and change what is launched without review.
 
-```
-# ~/.config/systemd/user/claude-desktop-update.timer
-[Unit]
-Description=Check for Claude Desktop updates
-
-[Timer]
-OnCalendar=daily
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-```
-
-with a matching `.service` running the script with no arguments.
+**Auto-update limits.**
+- The timer runs a copy of the installer made by `--enable-auto-update`
+  (`~/.local/share/claude-desktop/updater/`). That copy is never updated by
+  the timer; fixes to the installer reach it only when you run a newer
+  release with `--enable-auto-update` again.
+- A staged version sits in `~/.local/share/claude-desktop/staged/` between
+  verification and activation. It was verified when staged, not again when
+  activated; anything that can write to your home directory could alter it
+  in between (the same is true of `versions/`).
+- A network failure is written to the journal and retried the next day,
+  without a notification. Verification failures (signature, checksum,
+  fingerprint, freshness, downgrade) are notified as critical.
+- Notifications need a session bus and `notify-send`; without them the
+  message is in the journal only (`journalctl --user -u
+  claude-desktop-update`).
 
 ## Verification
 

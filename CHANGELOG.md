@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- `--enable-auto-update` / `--disable-auto-update`: a daily systemd user
+  timer runs `--stage`, which verifies the latest version with the full
+  trust chain and stages it under `staged/<ver>` (outside `versions/`, so
+  `--rollback` and retention never see it), then notifies with the version
+  and the package-metadata diff. It never changes what is launched.
+  `--activate-staged` switches to it offline. Verification failures are
+  notified as critical; network failures are logged and retried. The timer
+  runs a copy of the script made at enable time. `--uninstall` removes the
+  units; `--check` shows a staged version
+
 ## 1.2.0 (2026-11-23)
 
 - `--rollback`: switch `current` back to the other kept version, offline.
