@@ -734,6 +734,60 @@ do_uninstall() {
   exit 0
 }
 
+# --- rollback ----------------------------------------------------------------
+# rollback_switch -- point "current" at the other retained version. Offline:
+# nothing is downloaded or fetched, so the Date floor and the downgrade check
+# (which guard what the repository serves) are not involved. Sets ROLLBACK_FROM
+# and ROLLBACK_TO. Refuses, changing nothing, when there is no other version,
+# when its name is not N(.N)*, or when it lacks the binary the launcher runs.
+rollback_switch() {
+  local from to bin d v others=""
+  ROLLBACK_FROM=""; ROLLBACK_TO=""
+  [ -L "$CURRENT" ] || die "nothing installed ($CURRENT missing); nothing to roll back"
+  from="$(basename "$(readlink -f "$CURRENT")")"
+  for d in "$VERSIONS"/*/; do
+    [ -d "$d" ] || continue
+    v="$(basename "$d")"
+    [ "$v" = "$from" ] || others="$others$v"$'\n'
+  done
+  others="$(printf '%s' "$others" | sed '/^$/d')"
+  [ -n "$others" ] || die "only $from is installed; there is no previous version to roll back to"
+  # Retention keeps two versions, so there is one other; if more were left by
+  # hand, the newest of them is taken.
+  to="$(printf '%s\n' "$others" | sort -V | tail -n1)"
+  valid_version "$to" \
+    || die "retained version $(printf '%q' "$to") is not of the form N(.N)*; refusing to switch to it"
+  # The launcher runs current/<binary>; the target must have that binary.
+  bin="$(sed -n 's|^APP="\$HOME/\.local/share/claude-desktop/current/\(.*\)"$|\1|p' "$BIN" 2>/dev/null || true)"
+  [ -n "$bin" ] || bin="$(CURRENT="$VERSIONS/$from" installed_binname || true)"
+  [ -n "$bin" ] || die "cannot tell which binary the launcher runs; reinstall with --force"
+  [ -f "$VERSIONS/$to/$bin" ] && [ -x "$VERSIONS/$to/$bin" ] \
+    || die "version $to is incomplete ($bin missing or not executable); refusing to switch to it"
+  # Replace the link in one rename, so "current" never dangles.
+  ln -sfn "$VERSIONS/$to" "$CURRENT.rollback"
+  mv -fT "$CURRENT.rollback" "$CURRENT"
+  ROLLBACK_FROM="$from"; ROLLBACK_TO="$to"
+}
+
+# do_rollback -- --rollback: switch, report, then the same host check as after
+# an install (including a host-check-skipped record of the version switched to).
+do_rollback() {
+  rollback_switch
+  c_ok "rolled back: $ROLLBACK_FROM -> $ROLLBACK_TO"
+  c_info "$ROLLBACK_FROM stays on disk. A plain run of this script installs the newest"
+  c_info "repository version again; --rollback pins nothing."
+  c_info "A Claude Desktop that is already running keeps the old version until restarted."
+  echo
+  c_info "host check"
+  run_host_checks
+  echo
+  if [ "$HOST_FAIL" != 0 ]; then
+    c_warn "rolled back to $ROLLBACK_TO, but the problems marked [fail:...] above will stop it from running"
+    return 1
+  fi
+  c_ok "Claude Desktop $ROLLBACK_TO is now the active version"
+}
+
 usage() {
   cat <<USAGE
 claude-desktop-userland.sh $SELF_VERSION
@@ -746,6 +800,8 @@ bootc system, without dpkg, without layering, without root.
   --inspect     download latest, show package relations and maintainer
                 scripts, diff against the last seen version; no install
   --force       reinstall even if already up to date
+  --rollback    switch back to the previous version kept on disk; offline,
+                pins nothing (the next plain run installs the newest again)
   --allow-downgrade
                 modifier: accept a repository version older than the one
                 installed, and an index Date older than the last one
@@ -786,6 +842,7 @@ parse_args() {
       --check)         m="check" ;;
       --inspect)       m="inspect" ;;
       --force)         m="force" ;;
+      --rollback)      m="rollback" ;;
       --doctor)        m="doctor" ;;
       --print-apparmor-profile) m="apparmor" ;;
       -h|--help)       m="help" ;;
@@ -1321,6 +1378,7 @@ main() {
     uninstall) do_uninstall no ;;
     purge)     do_uninstall purge ;;
     doctor)    run_doctor; return ;;
+    rollback)  do_rollback; return ;;
     apparmor)  print_apparmor_profile; return 0 ;;
     help)      usage; return 0 ;;
     version)   printf '%s\n' "$SELF_VERSION"; return 0 ;;

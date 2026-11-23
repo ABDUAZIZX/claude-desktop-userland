@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `--rollback`: switch `current` back to the other kept version, offline.
+  The Date floor and the downgrade check are not involved; a version that
+  is not `N(.N)*` or lacks the binary the launcher runs is refused, changing
+  nothing. The host check runs afterwards, as after an install, including a
+  `host-check-skipped` record of the version switched to. Nothing is pinned:
+  the next plain run installs the newest repository version again
 - The `host-check-skipped` record is written only after the payload is
   installed, so a run that fails later leaves no record behind
 - CI: a `distros` workflow. A real install against the live repository feeds
