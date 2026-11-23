@@ -211,6 +211,9 @@ change:
 | `missing-libs` | shared libraries that do not resolve |
 <!-- fail-ids:end -->
 
+The IDs are stable. Renaming or removing one is a breaking change and is
+recorded as such in [CHANGELOG.md](CHANGELOG.md); new IDs may be added.
+
 ---
 
 ## User namespaces and the Chromium sandbox
