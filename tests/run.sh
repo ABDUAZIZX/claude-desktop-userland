@@ -728,7 +728,7 @@ t_skip_record_timing() {
 }
 
 # Test groups register themselves here.
-TESTS=(t_sourcing t_apparmor t_libs t_extract t_release_dates t_downgrade t_date_floor t_skip_record t_readme t_version_format t_date_floor_modes t_changelog t_skip_record_timing t_readme_git t_payload_verdict t_fail_ids t_release_sums)
+TESTS=(t_sourcing t_apparmor t_libs t_extract t_release_dates t_downgrade t_date_floor t_skip_record t_readme t_version_format t_date_floor_modes t_changelog t_skip_record_timing t_readme_git t_payload_verdict t_fail_ids t_release_sums t_rollback)
 
 t_readme_git() {
   if ! command -v git >/dev/null 2>&1; then
@@ -880,6 +880,95 @@ t_release_sums() {
     bash -c 'cd "$1" && shift && env "$@"' _ "$d/repo" "${cfg[@]}" bash "$tool" make v9.9.9 "$d/out-other" "$d/other"
   expect_out 'already holds SHA256SUMS' "release-sums make: existing SHA256SUMS is not overwritten" \
     bash -c 'cd "$1" && shift && env "$@"' _ "$d/repo" "${cfg[@]}" bash "$tool" make v9.9.9 "$d/out"
+}
+
+# --rollback: fixture homes with retained versions; everything offline.
+mk_rb_home() {  # mk_rb_home HOME CURRENT-VERSION OTHER-VERSION...
+  local h="$1" cur="$2" v; shift 2
+  local vers="$h/.local/share/claude-desktop/versions"
+  for v in "$cur" "$@"; do
+    mkdir -p "$vers/$v"
+    printf '#!/bin/sh\necho %s\n' "$v" >"$vers/$v/claude-desktop"
+    chmod +x "$vers/$v/claude-desktop"
+  done
+  ln -sfn "$vers/$cur" "$h/.local/share/claude-desktop/current"
+  mkdir -p "$h/.local/bin" "$h/.local/share/claude-desktop/state"
+  printf 'APP="$HOME/.local/share/claude-desktop/current/claude-desktop"\n' >"$h/.local/bin/claude-desktop"
+  printf '1700000000\n' >"$h/.local/share/claude-desktop/state/last-release-date"
+}
+rb_cur() { basename "$(readlink -f "$1/.local/share/claude-desktop/current")"; }
+
+t_rollback() {
+  local d="$WORK/rollback" h out rc
+  mkdir -p "$d"
+
+  h="$d/basic"; mk_rb_home "$h" 2.0.0 1.0.0
+  out="$(env HOME="$h" PATH="$STUBS:$PATH" bash -c '. "$1"; set -euo pipefail; rollback_switch; echo "$ROLLBACK_FROM->$ROLLBACK_TO"' _ "$SCRIPT" 2>&1)"; rc=$?
+  if [ "$rc" = 0 ] && [ "$out" = "2.0.0->1.0.0" ] && [ "$(rb_cur "$h")" = 1.0.0 ]; then ok "rollback switches current to the other version"
+  else nok "rollback switches current to the other version" "rc=$rc out=$out current=$(rb_cur "$h")"; fi
+  [ ! -e "$h/.local/share/claude-desktop/current.rollback" ] && ok "rollback leaves no temporary link" || nok "rollback leaves no temporary link"
+  if [ "$(cat "$h/.local/share/claude-desktop/state/last-release-date")" = 1700000000 ]; then ok "rollback leaves the Date floor untouched"
+  else nok "rollback leaves the Date floor untouched"; fi
+  out="$(env HOME="$h" PATH="$STUBS:$PATH" bash -c '. "$1"; set -euo pipefail; rollback_switch; echo "$ROLLBACK_FROM->$ROLLBACK_TO"' _ "$SCRIPT" 2>&1)"
+  [ "$out" = "1.0.0->2.0.0" ] && ok "a second rollback switches back" || nok "a second rollback switches back" "$out"
+
+  # main --rollback: offline (curl/gpg stubs fail loudly if called)
+  h="$d/main"; mk_rb_home "$h" 2.0.0 1.0.0
+  out="$(env HOME="$h" PATH="$STUBS:$PATH" bash "$SCRIPT" --rollback 2>&1)"
+  if ! grep -q 'test stub' <<<"$out" && grep -q 'rolled back: 2.0.0 -> 1.0.0' <<<"$out" && [ "$(rb_cur "$h")" = 1.0.0 ]; then
+    ok "--rollback runs offline and reports the switch"
+  else nok "--rollback runs offline and reports the switch" "$out"; fi
+  grep -q 'host check' <<<"$out" && ok "--rollback runs the host check afterwards" || nok "--rollback runs the host check afterwards" "$out"
+
+  # host check verdict decides the exit code, as after an install
+  h="$d/verdict-ok"; mk_rb_home "$h" 2.0.0 1.0.0
+  expect_rc 0 "--rollback exits 0 when the host check passes" \
+    env HOME="$h" PATH="$STUBS:$PATH" bash -c '. "$1"; set -euo pipefail; run_host_checks() { HOST_FAIL=0; }; do_rollback' _ "$SCRIPT"
+  h="$d/verdict-fail"; mk_rb_home "$h" 2.0.0 1.0.0
+  expect_rc 1 "--rollback exits 1 when the host check fails" \
+    env HOME="$h" PATH="$STUBS:$PATH" bash -c '. "$1"; set -euo pipefail; run_host_checks() { HOST_FAIL=1; }; do_rollback' _ "$SCRIPT"
+
+  # a host-check-skipped record of the version switched to is reported
+  h="$d/record"; mk_rb_home "$h" 2.0.0 1.0.0
+  mkdir -p "$h/.local/share/claude-desktop/package-meta/1.0.0"
+  printf 'option=--skip-host-check\nglibc=2.31\nfloor_violated=1\n' >"$h/.local/share/claude-desktop/package-meta/1.0.0/host-check-skipped"
+  out="$(env HOME="$h" PATH="$STUBS:$PATH" bash -c '. "$1"; set -euo pipefail; rollback_switch; HOST_FAIL=0; check_host_check_record; echo "HF=$HOST_FAIL"' _ "$SCRIPT" 2>&1 | sed 's/\x1b\[[0-9;]*m//g')"
+  if grep -q '^\[fail:glibc-check-skipped\] .*1\.0\.0 was installed with --skip-host-check' <<<"$out" && grep -q 'HF=1' <<<"$out"; then
+    ok "the target's host-check-skipped record is reported after rollback"
+  else nok "the target's host-check-skipped record is reported after rollback" "$out"; fi
+
+  # with three versions left by hand, the newest other one is chosen
+  h="$d/three"; mk_rb_home "$h" 2.0.0 1.0.0 1.5.0
+  env HOME="$h" PATH="$STUBS:$PATH" bash -c '. "$1"; set -euo pipefail; rollback_switch' _ "$SCRIPT" >/dev/null 2>&1
+  [ "$(rb_cur "$h")" = 1.5.0 ] && ok "with three versions the newest other one is chosen" || nok "with three versions the newest other one is chosen" "$(rb_cur "$h")"
+
+  # refusals: nothing changes
+  rb_refuse() {  # rb_refuse NAME PATTERN HOME
+    local out rc before
+    before="$(readlink "$3/.local/share/claude-desktop/current" 2>/dev/null || echo none)"
+    out="$(env HOME="$3" PATH="$STUBS:$PATH" bash -c '. "$1"; set -euo pipefail; rollback_switch' _ "$SCRIPT" 2>&1)"; rc=$?
+    if [ "$rc" != 0 ] && grep -qE -- "$2" <<<"$out" \
+       && [ "$(readlink "$3/.local/share/claude-desktop/current" 2>/dev/null || echo none)" = "$before" ]; then ok "$1"
+    else nok "$1" "rc=$rc out=$out"; fi
+  }
+  h="$d/single"; mk_rb_home "$h" 2.0.0
+  rb_refuse "rollback refused with a single version" 'no previous version' "$h"
+  h="$d/malformed"; mk_rb_home "$h" 2.0.0 '1.0~rc1'
+  rb_refuse "rollback refused for a version not of the form N(.N)*" 'not of the form' "$h"
+  h="$d/nobin"; mk_rb_home "$h" 2.0.0 1.0.0
+  rm "$h/.local/share/claude-desktop/versions/1.0.0/claude-desktop"
+  rb_refuse "rollback refused when the other version lacks its binary" 'incomplete' "$h"
+  h="$d/noexec"; mk_rb_home "$h" 2.0.0 1.0.0
+  chmod -x "$h/.local/share/claude-desktop/versions/1.0.0/claude-desktop"
+  rb_refuse "rollback refused when the binary is not executable" 'incomplete' "$h"
+  h="$d/empty"; mkdir -p "$h"
+  rb_refuse "rollback refused when nothing is installed" 'nothing installed' "$h"
+
+  expect_rc 1 "--rollback cannot be combined with --allow-downgrade" parse_args --rollback --allow-downgrade
+  expect_rc 1 "--rollback cannot be combined with --skip-host-check" parse_args --rollback --skip-host-check
+
+  # the next plain install moves forward again: not a downgrade from the rolled-back version
+  expect_rc 0 "after rollback, the newer repository version is not a downgrade" check_version_order 1.0.0 2.0.0 0
 }
 
 for t in "${TESTS[@]}"; do "$t"; done

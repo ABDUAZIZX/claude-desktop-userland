@@ -92,13 +92,10 @@ against.
 Nothing is written outside `$HOME`. Uninstalling is `rm -rf` of the paths above,
 which is exactly what `--uninstall` does.
 
-The two most recent versions are kept. If an update misbehaves, point the
-symlink back:
-
-```
-ln -sfn ~/.local/share/claude-desktop/versions/<older> \
-        ~/.local/share/claude-desktop/current
-```
+The two most recent versions are kept. If an update misbehaves, switch back
+with `--rollback`: offline, it points `current` at the other kept version
+(after checking that it is complete), then runs the host check. It pins
+nothing; the next plain run installs the newest repository version again.
 
 ---
 
@@ -118,6 +115,8 @@ bootc system, without dpkg, without layering, without root.
   --inspect     download latest, show package relations and maintainer
                 scripts, diff against the last seen version; no install
   --force       reinstall even if already up to date
+  --rollback    switch back to the previous version kept on disk; offline,
+                pins nothing (the next plain run installs the newest again)
   --allow-downgrade
                 modifier: accept a repository version older than the one
                 installed, and an index Date older than the last one
