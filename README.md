@@ -231,18 +231,36 @@ Details: [docs/LIMITATIONS.md](docs/LIMITATIONS.md#apparmor-on-ubuntu-2404).
 
 | System | Status |
 | --- | --- |
-| Bluefin LTS (`bluefin-lts-nvidia`, CentOS Stream 10 base), GNOME on Wayland | **Tested**: installed, upgraded and used daily by the author |
+| Bluefin LTS (`bluefin-lts-nvidia`, CentOS Stream 10 base), GNOME on Wayland | **Works (daily use)** |
+| Ubuntu 24.04 | **Launch + sandbox verified (CI)** |
+| Ubuntu 22.04 | Libraries checked (CI) |
+| Debian 12 / 13 | Libraries checked (CI) |
+| Fedora 43 | Libraries checked (CI) |
+| Arch Linux | Libraries checked (CI) |
+| openSUSE Tumbleweed | Libraries checked (CI) |
 | Fedora Silverblue / Kinoite, other uBlue images | Untested |
-| Fedora Workstation | Untested |
-| Ubuntu 24.04+ (AppArmor userns restriction) | Untested |
-| Ubuntu 22.04 | Untested |
-| Debian 12 / 13 | Untested |
-| Arch Linux | Untested |
-| openSUSE Tumbleweed | Untested |
-| glibc older than 2.34 (Debian 11, RHEL/Alma/Rocky 8), musl (Alpine, Void-musl) | Not supported: refused by design (see Requirements) |
+| AlmaLinux 8 (glibc 2.28), Alpine (musl) | Refused (CI) |
 
-"Untested" stays until the CI matrix in [ROADMAP.md](ROADMAP.md) runs on that
-system.
+What each status means:
+
+- **Works (daily use)**: installed, upgraded and used every day by the author.
+- **Launch + sandbox verified (CI)**: the `sandbox` job of the
+  [`distros` workflow](.github/workflows/distros.yml) launches the app on a
+  GitHub Ubuntu 24.04 runner with the AppArmor userns restriction on, and
+  confirms that the renderer runs in its own user namespace with the profile
+  from `--print-apparmor-profile` and does not without it. A virtual display
+  is used; nobody signed in or used the app there.
+- **Libraries checked (CI)**: in a container of that distribution, the unit
+  tests pass and every shared library resolves after installing the packages
+  `--doctor` suggests. The app is not launched, so the sandbox, the display
+  and the login are not covered.
+- **Untested**: none of the above has run on that system.
+- **Refused (CI)**: the installer stops before downloading anything, by design
+  (see Requirements); CI checks that it still does. Other systems with glibc
+  older than 2.34 or with musl are refused the same way.
+
+The CI statuses come from the weekly and per-change runs of the `distros`
+workflow; a failing run there means the table no longer holds for that row.
 
 ---
 

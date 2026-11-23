@@ -47,13 +47,26 @@ it exactly when nobody is watching.
   itself with a minimal-permission token). Commits only to keep the schedule
   alive are not wanted.
 
-## README compatibility table
+## Generate the README compatibility table
 
-Generated from the CI results, with wording that matches what was actually
-tested:
+The statuses in the README (Works (daily use), Launch + sandbox verified
+(CI), Libraries checked (CI), Untested, Refused (CI)) are written by hand
+from the `distros` results. Generating the CI rows from the last green run
+of that workflow would keep them from drifting when the matrix changes.
 
-- **"Libraries checked"** when only the `containers` job of the `distros`
-  workflow ran for that distribution.
-- **"Works"** only when the application was actually launched and the sandbox
-  confirmed on that distribution (today only the `sandbox` job, on Ubuntu
-  24.04).
+## Payload verdict: decouple from the AppArmor message text
+
+`tests/payload-verdict.sh` accepts an installer exit code of 1 only when the
+single `[fail]` line equals the AppArmor userns message, copied as a literal
+string. Rewording that message in `check_userns` would make every `payload`
+run fail, with nothing pointing at the cause. Either:
+
+- the installer prints a fixed marker for each host-check failure (for
+  example `[fail:apparmor-userns]`) and the verdict matches the marker, not
+  the prose; or
+- a unit test runs `check_userns` against a restricted sysctl fixture and
+  checks that its `[fail]` line equals the string in `payload-verdict.sh`, so
+  a rewording fails `tests/run.sh` in the same change.
+
+The marker is the more robust option; it also lets other tools tell failures
+apart without parsing English.
