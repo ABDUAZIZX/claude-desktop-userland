@@ -97,15 +97,55 @@ curl -fsSL https://raw.githubusercontent.com/ABDUAZIZX/claude-desktop-userland/v
   | sha256sum                            # must equal the README value
 ```
 
-## 7. GitHub Release with the SHA256
+## 7. Signed SHA256SUMS
 
-Create a release from tag `vX.Y.Z`:
+Create the release files from the verified tag, signed with the key that
+signed the tag (git's `user.signingkey`; any other key is refused):
 
-- Attach `claude-desktop-userland.sh` taken from the tag
-  (`git show vX.Y.Z:claude-desktop-userland.sh > claude-desktop-userland.sh`).
-- Put its SHA256 in the release notes, in `sha256sum` format:
-  `<sha256>  claude-desktop-userland.sh`
-- Copy the `X.Y.Z` section of `CHANGELOG.md` into the notes.
+```
+DIR="$(mktemp -d)"
+bash tools/release-sums.sh make vX.Y.Z "$DIR"
+```
 
-The three values (README, raw URL, release asset) must be identical. If one
-differs, delete the release and the tag and start again from step 1.
+It verifies the tag (`git tag -v`), takes `claude-desktop-userland.sh` from
+the tag, writes `SHA256SUMS` and signs it into `SHA256SUMS.sig` (SSH
+signature, namespace `file`).
+
+Verify them against the key **as published on GitHub**, not the local copy,
+exactly as a user would (the README section "Verify a release signature"):
+
+```
+curl -fsSL https://api.github.com/users/ABDUAZIZX/ssh_signing_keys \
+  | grep -o '"key": *"[^"]*"' | cut -d'"' -f4 > "$DIR/signing_key.pub"
+ssh-keygen -lf "$DIR/signing_key.pub"   # SHA256:DFqKPwKi7WOq6aOIBO9yx6LqjhgqC/n29X6v4u8oVsI
+sed 's/^/release namespaces="file" /' "$DIR/signing_key.pub" > "$DIR/allowed_signers"
+bash tools/release-sums.sh verify "$DIR" "$DIR/allowed_signers"
+```
+
+If verification fails, do not publish; find out why (wrong key, key not
+registered as a signing key on GitHub, edited file).
+
+## 8. GitHub Release
+
+Create a release from tag `vX.Y.Z` with three assets from that directory:
+
+- `claude-desktop-userland.sh`
+- `SHA256SUMS`
+- `SHA256SUMS.sig`
+
+```
+gh release create vX.Y.Z --verify-tag --title vX.Y.Z --notes-file NOTES.md \
+  "$DIR/claude-desktop-userland.sh" "$DIR/SHA256SUMS" "$DIR/SHA256SUMS.sig"
+```
+
+In the notes:
+
+- the content of `SHA256SUMS` (`<sha256>  claude-desktop-userland.sh`)
+- the `X.Y.Z` section of `CHANGELOG.md`
+
+The values in the README, the raw URL, the release asset and `SHA256SUMS`
+must be identical, and `SHA256SUMS.sig` must verify. If any check fails,
+delete the release and the tag and start again from step 1.
+
+After publishing, download the three assets from the release page into an
+empty directory and run the README verification commands once more.

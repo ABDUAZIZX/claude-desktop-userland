@@ -21,14 +21,14 @@ case "$ids" in
     apt-get update
     if [ "$level" = full ]; then
       apt-get install -y --no-install-recommends bash ca-certificates curl gnupg git \
-        binutils xz-utils zstd gzip tar python3 libarchive-tools diffutils findutils gawk
+        binutils xz-utils zstd gzip tar python3 libarchive-tools diffutils findutils gawk openssh-client
     else
       apt-get install -y --no-install-recommends bash ca-certificates curl gnupg binutils
     fi ;;
   *" fedora "*|*" rhel "*)
     if [ "$level" = full ]; then
       dnf install -y --setopt=install_weak_deps=False bash ca-certificates curl gnupg2 git-core \
-        binutils xz zstd gzip tar python3 bsdtar diffutils findutils gawk glibc-common
+        binutils xz zstd gzip tar python3 bsdtar diffutils findutils gawk glibc-common openssh
     else
       dnf install -y --setopt=install_weak_deps=False bash curl gnupg2 binutils diffutils findutils gawk
     fi ;;
@@ -36,7 +36,7 @@ case "$ids" in
     pacman -Syu --noconfirm
     if [ "$level" = full ]; then
       pacman -S --needed --noconfirm bash ca-certificates curl gnupg git \
-        binutils xz zstd gzip tar python libarchive diffutils findutils gawk
+        binutils xz zstd gzip tar python libarchive diffutils findutils gawk openssh
     else
       pacman -S --needed --noconfirm bash curl gnupg binutils diffutils findutils gawk
     fi ;;
@@ -44,7 +44,7 @@ case "$ids" in
     zypper --non-interactive refresh
     if [ "$level" = full ]; then
       zypper --non-interactive install --no-recommends bash ca-certificates curl gpg2 git-core \
-        binutils xz zstd gzip tar python3 bsdtar diffutils findutils gawk
+        binutils xz zstd gzip tar python3 bsdtar diffutils findutils gawk openssh-clients
     else
       zypper --non-interactive install --no-recommends bash curl gpg2 binutils diffutils findutils gawk
     fi ;;

@@ -16,6 +16,12 @@
   `[fail:apparmor-userns]`, `[fail:missing-libs]`), listed in the README.
   Scripts and CI match the marker instead of the wording; tests keep the
   README list, the call sites and the CI verdict in step
+- Releases carry `SHA256SUMS` and a detached SSH signature
+  `SHA256SUMS.sig`, made with the key that signs the tags and checked against
+  the key published on the maintainer's GitHub account.
+  `tools/release-sums.sh` creates (refusing an unsigned tag or a key other
+  than the tag's) and verifies them; RELEASING.md and the README document
+  both sides
 - CI: every action is pinned to a commit SHA, and both workflows run with a
   read-only token (`contents: read`)
 

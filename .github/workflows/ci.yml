@@ -33,6 +33,7 @@ jobs:
           shellcheck -S warning -x tests/run.sh
           shellcheck -S warning tests/distro-check.sh tests/distro-run.sh tests/sandbox-check.sh tests/payload-verdict.sh
           shellcheck -S warning -s sh tests/distro-setup.sh
+          shellcheck -S warning tools/release-sums.sh
 
       - name: Unit tests
         run: bash tests/run.sh --no-skip
