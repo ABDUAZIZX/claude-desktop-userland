@@ -41,8 +41,11 @@ case "$kind" in
       set -e
       sh /src/tests/distro-setup.sh full >/tmp/setup.log 2>&1 \
         || { tail -n 40 /tmp/setup.log; echo "FAIL setting up the container" >&2; exit 1; }
-      # the checkout belongs to another uid than root in the container
-      git config --global --add safe.directory "*"
+      # The checkout belongs to another uid than root in the container. System
+      # scope, because tests/run.sh sets its own HOME and would not see a
+      # --global setting (git would then refuse the repository and the README
+      # hash test would fall back to the working copy).
+      git config --system --add safe.directory "*"
       bash /src/tests/run.sh --no-skip
       echo "--- shared libraries"
       bash /src/tests/distro-check.sh libs /payload'
