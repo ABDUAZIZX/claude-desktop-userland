@@ -4,6 +4,12 @@
 
 - The `host-check-skipped` record is written only after the payload is
   installed, so a run that fails later leaves no record behind
+- CI: a `distros` workflow. A real install against the live repository feeds
+  one container per distribution (Ubuntu 22.04 / 24.04, Debian 12 / 13,
+  Fedora 43, Arch, openSUSE Tumbleweed), each running the unit tests and a
+  library round trip: the packages the installer suggests are installed and
+  every library must then resolve. AlmaLinux 8 and Alpine must be refused
+  before any download
 - CI: every action is pinned to a commit SHA, and both workflows run with a
   read-only token (`contents: read`)
 

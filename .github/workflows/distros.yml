@@ -1,0 +1,132 @@
+name: distros
+
+# Distribution matrix. Heavier than "ci" and dependent on the live repository,
+# so it runs only when the installer or its tests change, weekly (to catch a new
+# upstream release that needs another library), and on demand.
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - claude-desktop-userland.sh
+      - tests/**
+      - .github/workflows/distros.yml
+  pull_request:
+    paths:
+      - claude-desktop-userland.sh
+      - tests/**
+      - .github/workflows/distros.yml
+  schedule:
+    - cron: '17 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # The only download of the package per run: a real install against the live
+  # repository (full trust chain) on the runner. The resulting install
+  # (versions, current, package-meta, launcher) is packed with tar, which keeps
+  # the executable bits that upload-artifact would drop, and is reused by the
+  # container jobs.
+  payload:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      version: ${{ steps.install.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install from the live repository
+        id: install
+        run: |
+          log="$RUNNER_TEMP/install.log"
+          set +e
+          bash claude-desktop-userland.sh 2>&1 | tee "$log"
+          rc="${PIPESTATUS[0]}"
+          set -e
+          cur="$HOME/.local/share/claude-desktop/current"
+          if [ ! -L "$cur" ]; then
+            # Failures of the live repository are not defects in this code.
+            if grep -qE 'could not download|download failed|failed the freshness check' "$log"; then
+              echo "::error title=Live repository unavailable::downloads.claude.ai could not be reached or served an expired / future-dated index (Valid-Until / Date). This is not a defect in the code; re-run the workflow later."
+            else
+              echo "::error title=Install failed::the installer stopped before completing (rc=$rc); see the log above."
+            fi
+            exit 1
+          fi
+          # The final host check may fail on this runner (AppArmor restriction,
+          # libraries absent); the install itself has completed.
+          ver="$(basename "$(readlink -f "$cur")")"
+          echo "installed $ver (installer rc=$rc)"
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          tar -C "$HOME" -cf "$RUNNER_TEMP/install.tar" \
+            .local/share/claude-desktop .local/bin/claude-desktop
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: install
+          path: ${{ runner.temp }}/install.tar
+          retention-days: 1
+          compression-level: 6
+
+  # Host checks, library resolution and the .deb extraction chain, one container
+  # per distribution. Electron would run as root in a container and need
+  # --no-sandbox, so nothing here says anything about the sandbox.
+  containers:
+    needs: payload
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: ubuntu-22.04,  image: 'docker.io/library/ubuntu:22.04' }
+          - { name: ubuntu-24.04,  image: 'docker.io/library/ubuntu:24.04' }
+          - { name: debian-12,     image: 'docker.io/library/debian:12' }
+          - { name: debian-13,     image: 'docker.io/library/debian:13' }
+          - { name: fedora-43,     image: 'registry.fedoraproject.org/fedora:43' }
+          - { name: arch,          image: 'docker.io/library/archlinux:latest' }
+          - { name: tumbleweed,    image: 'registry.opensuse.org/opensuse/tumbleweed:latest' }
+    name: containers (${{ matrix.name }})
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # the README hash test compares against the released tag
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: install
+          path: ${{ runner.temp }}
+
+      - name: Unit tests and library check
+        env:
+          IMAGE: ${{ matrix.image }}
+          APP_VER: ${{ needs.payload.outputs.version }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/install"
+          tar -C "$RUNNER_TEMP/install" -xf "$RUNNER_TEMP/install.tar"
+          CONTAINER_ENGINE=docker bash tests/distro-run.sh full "$IMAGE" \
+            "$RUNNER_TEMP/install/.local/share/claude-desktop/versions/$APP_VER"
+
+  # Distributions the installer must refuse before downloading anything.
+  refused:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: almalinux-8, image: 'docker.io/library/almalinux:8',
+              expect: 'glibc 2\.28 is older than the required 2\.34' }
+          - { name: alpine,      image: 'docker.io/library/alpine:3',
+              expect: 'glibc not found \(musl' }
+    name: refused (${{ matrix.name }})
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install must stop before the download
+        env:
+          IMAGE: ${{ matrix.image }}
+          EXPECT: ${{ matrix.expect }}
+        run: CONTAINER_ENGINE=docker bash tests/distro-run.sh refused "$IMAGE" "$EXPECT"
